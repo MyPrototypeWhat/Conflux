@@ -17,6 +17,7 @@
     "preview": "electron-vite preview"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.19",
     "@base-ui/react": "^1.1.0",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@hugeicons/core-free-icons": "^3.1.1",

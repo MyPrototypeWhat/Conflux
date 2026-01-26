@@ -3,7 +3,6 @@ import {
   type AgentConfigs,
   type AgentId,
   type AppConfig,
-  DEFAULT_APP_CONFIG,
   DEFAULT_CLAUDE_CODE_CONFIG,
   DEFAULT_CODEX_CONFIG,
   DEFAULT_GEMINI_CONFIG,
