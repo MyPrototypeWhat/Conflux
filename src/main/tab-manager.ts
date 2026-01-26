@@ -26,9 +26,10 @@ export class TabManager {
   private createTabbarView(): WebContentsView {
     const view = new WebContentsView({
       webPreferences: {
-        preload: join(__dirname, '../preload/tabbar.js'),
+        preload: join(__dirname, '../preload/tabbar.mjs'),
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: false, // Required for ESM preload scripts
       },
     })
 
@@ -71,9 +72,10 @@ export class TabManager {
 
     const view = new WebContentsView({
       webPreferences: {
-        preload: join(__dirname, '../preload/agent.js'),
+        preload: join(__dirname, '../preload/agent.mjs'),
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: false, // Required for ESM preload scripts
       },
     })
 
@@ -218,9 +220,10 @@ export class TabManager {
     // Create new view
     const newView = new WebContentsView({
       webPreferences: {
-        preload: join(__dirname, '../preload/agent.js'),
+        preload: join(__dirname, '../preload/agent.mjs'),
         contextIsolation: true,
         nodeIntegration: false,
+        sandbox: false, // Required for ESM preload scripts
       },
     })
 
@@ -273,6 +276,14 @@ export class TabManager {
     for (const view of this.contentViews.values()) {
       view.webContents.send(channel, data)
     }
+  }
+
+  broadcastToTabbar(channel: string, data: unknown): void {
+    this.tabbarView.webContents.send(channel, data)
+  }
+
+  getTabbarView(): WebContentsView {
+    return this.tabbarView
   }
 
   getActiveTabId(): string | null {

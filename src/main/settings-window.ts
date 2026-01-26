@@ -19,9 +19,10 @@ export function openSettingsWindow(): void {
     minimizable: false,
     maximizable: false,
     webPreferences: {
-      preload: join(__dirname, '../preload/agent.js'),
+      preload: join(__dirname, '../preload/agent.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false, // Required for ESM preload scripts
     },
   })
 

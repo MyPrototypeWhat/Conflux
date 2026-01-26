@@ -29,7 +29,6 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
       watch: {},
       rollupOptions: {
@@ -38,10 +37,15 @@ export default defineConfig({
           agent: resolve(__dirname, 'src/preload/agent.ts'),
         },
         output: {
-          format: 'cjs',
-          entryFileNames: '[name].js',
+          // ESM format for preload scripts (requires sandbox: false)
+          format: 'es',
         },
       },
+      // Enable isolated build for multiple preload entries with shared imports
+      // This outputs each entry as a single bundle (no chunks)
+      isolatedEntries: true,
+      // Disable dependency externalization to bundle all dependencies
+      externalizeDeps: false,
     },
   },
   renderer: {
