@@ -35,11 +35,13 @@ conflux/
 │   │   └── index.ts
 │   ├── preload/              # Preload scripts
 │   │   └── index.ts
-│   ├── components/ui/        # shadcn components
-│   ├── lib/utils.ts
-│   ├── types/electron.d.ts
-│   ├── App.tsx
-│   └── main.tsx
+│   └── renderer/             # Renderer process (React)
+│       ├── components/ui/    # shadcn components
+│       ├── lib/utils.ts
+│       ├── types/electron.d.ts
+│       ├── App.tsx
+│       ├── index.tsx
+│       └── index.css
 ├── electron.vite.config.ts   # electron-vite config
 ├── components.json           # shadcn config
 └── out/                      # Build output

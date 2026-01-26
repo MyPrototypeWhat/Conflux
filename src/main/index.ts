@@ -1,32 +1,33 @@
-import { app, BrowserWindow, ipcMain } from "electron"
-import { join } from "path"
-import { is } from "@electron-toolkit/utils"
+import { app, BaseWindow } from "electron"
+import { TabManager } from "./tab-manager"
+import { setupIPCHandlers } from "./ipc-handlers"
+
+let tabManager: TabManager | null = null
 
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  const mainWindow = new BaseWindow({
     width: 1200,
     height: 800,
     title: "Conflux - A2A Agent Platform",
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
+    show: false,
   })
 
-  if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
-    mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"])
-    mainWindow.webContents.openDevTools()
-  } else {
-    mainWindow.loadFile(join(__dirname, "../renderer/index.html"))
-  }
+  tabManager = new TabManager(mainWindow)
+  setupIPCHandlers(tabManager)
+
+  // Create a default Claude Code tab
+  tabManager.createTab({ agentId: "claude-code" })
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show()
+  })
 }
 
 app.whenReady().then(() => {
   createWindow()
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (BaseWindow.getAllWindows().length === 0) {
       createWindow()
     }
   })
@@ -37,6 +38,3 @@ app.on("window-all-closed", () => {
     app.quit()
   }
 })
-
-// IPC handlers
-ipcMain.handle("ping", () => "pong")

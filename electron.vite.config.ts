@@ -2,6 +2,19 @@ import { defineConfig, externalizeDepsPlugin } from "electron-vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 import { resolve } from "path"
+import { readdirSync, existsSync } from "fs"
+
+// Auto-scan pages directory
+const pagesDir = resolve(__dirname, "src/renderer/pages")
+const pageDirs = existsSync(pagesDir)
+  ? readdirSync(pagesDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isDirectory())
+      .map((dirent) => dirent.name)
+  : []
+
+const pageInputs = Object.fromEntries(
+  pageDirs.map((dir) => [dir, resolve(__dirname, `src/renderer/pages/${dir}/index.html`)])
+)
 
 export default defineConfig({
   main: {
@@ -17,31 +30,33 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
-      lib: {
-        entry: resolve(__dirname, "src/preload/index.ts"),
-        formats: ["cjs"],
-        fileName: () => "index.js",
-      },
       rollupOptions: {
+        input: {
+          tabbar: resolve(__dirname, "src/preload/tabbar.ts"),
+          agent: resolve(__dirname, "src/preload/agent.ts"),
+        },
         output: {
-          entryFileNames: "index.js",
+          entryFileNames: "[name].js",
         },
       },
     },
   },
   renderer: {
-    root: ".",
+    root: "src/renderer",
     build: {
+      outDir: resolve(__dirname, "out/renderer"),
       rollupOptions: {
         input: {
-          index: resolve(__dirname, "index.html"),
+          tabbar: resolve(__dirname, "src/renderer/tabbar/index.html"),
+          ...pageInputs,
         },
       },
     },
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        "@": resolve(__dirname, "./src"),
+        "@": resolve(__dirname, "./src/renderer"),
+        "@types": resolve(__dirname, "./src/types"),
       },
       dedupe: ["react", "react-dom"],
     },
