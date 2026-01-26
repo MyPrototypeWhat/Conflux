@@ -259,48 +259,6 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
       setMessages((prev) => [...prev, userMessage, assistantMessage])
       setIsLoading(true)
 
-      // Track current block
-      let currentBlockId: string | null = null
-      let currentBlockType: MessageBlockType | null = null
-
-      const addOrUpdateBlock = (type: MessageBlockType, text: string) => {
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id !== assistantMessageId) return msg
-
-            // Find existing block of same type that's still streaming
-            const existingBlockIndex = msg.blocks.findIndex(
-              (b) => b.type === type && b.id === currentBlockId
-            )
-
-            if (existingBlockIndex >= 0 && type === currentBlockType) {
-              // Append to existing block
-              const updatedBlocks = [...msg.blocks]
-              updatedBlocks[existingBlockIndex] = {
-                ...updatedBlocks[existingBlockIndex],
-                content: updatedBlocks[existingBlockIndex].content + text,
-              }
-              return { ...msg, blocks: updatedBlocks }
-            } else {
-              // Mark previous block as done and create new block
-              const updatedBlocks = msg.blocks.map((b) =>
-                b.id === currentBlockId ? { ...b, isStreaming: false } : b
-              )
-              const newBlockId = crypto.randomUUID()
-              currentBlockId = newBlockId
-              currentBlockType = type
-              return {
-                ...msg,
-                blocks: [
-                  ...updatedBlocks,
-                  { id: newBlockId, type, content: text, isStreaming: true },
-                ],
-              }
-            }
-          })
-        )
-      }
-
       try {
         // Get context ID from main process
         const contextId = (await window.agentAPI.a2a.getContextId()) || crypto.randomUUID()
@@ -317,10 +275,57 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
             else if (itemType === 'tool_call') blockType = 'tool_call'
             else if (itemType === 'file_change') blockType = 'file_change'
 
-            addOrUpdateBlock(blockType, event.text)
+            // Update message with new block content
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.id !== assistantMessageId) return msg
+
+                const blocks = [...msg.blocks]
+                // Find last block of same type that's streaming
+                const lastBlockIndex = blocks.length - 1
+                const lastBlock = blocks[lastBlockIndex]
+
+                if (lastBlock && lastBlock.type === blockType && lastBlock.isStreaming) {
+                  // Append to existing block
+                  blocks[lastBlockIndex] = {
+                    ...lastBlock,
+                    content: lastBlock.content + event.text,
+                  }
+                } else {
+                  // Mark previous block as done (if exists) and create new block
+                  if (lastBlock && lastBlock.isStreaming) {
+                    blocks[lastBlockIndex] = { ...lastBlock, isStreaming: false }
+                  }
+                  blocks.push({
+                    id: crypto.randomUUID(),
+                    type: blockType,
+                    content: event.text || '',
+                    isStreaming: true,
+                  })
+                }
+
+                return { ...msg, blocks }
+              })
+            )
           } else if (event.type === 'error') {
             const error = event.error || 'Unknown error'
-            addOrUpdateBlock('text', `Error: ${error}`)
+            setMessages((prev) =>
+              prev.map((msg) => {
+                if (msg.id !== assistantMessageId) return msg
+                return {
+                  ...msg,
+                  blocks: [
+                    ...msg.blocks,
+                    {
+                      id: crypto.randomUUID(),
+                      type: 'text',
+                      content: `Error: ${error}`,
+                      isStreaming: false,
+                    },
+                  ],
+                }
+              })
+            )
             options.onError?.(error)
             break
           }
@@ -339,14 +344,21 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
         )
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to send message'
-        addOrUpdateBlock('text', `Error: ${error}`)
         setMessages((prev) =>
           prev.map((msg) => {
             if (msg.id !== assistantMessageId) return msg
             return {
               ...msg,
               isStreaming: false,
-              blocks: msg.blocks.map((b) => ({ ...b, isStreaming: false })),
+              blocks: [
+                ...msg.blocks.map((b) => ({ ...b, isStreaming: false })),
+                {
+                  id: crypto.randomUUID(),
+                  type: 'text' as const,
+                  content: `Error: ${error}`,
+                  isStreaming: false,
+                },
+              ],
             }
           })
         )
