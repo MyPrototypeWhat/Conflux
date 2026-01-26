@@ -1,5 +1,6 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, ipcMain } from 'electron'
 import type { AgentConfigs, AgentId, AppConfig, GlobalConfig } from '../../types/config'
+import { getTabManager } from '../index'
 import { getConfigRepository } from '../storage'
 
 type DeepPartial<T> = {
@@ -21,7 +22,26 @@ export function setupConfigHandlers(): void {
   })
 
   ipcMain.handle('config:setGlobal', (_, config: DeepPartial<GlobalConfig>): void => {
+    const oldConfig = repo.getGlobal()
     repo.setGlobal(config)
+
+    // Broadcast theme change to all windows/views
+    if (config.theme && config.theme !== oldConfig.theme) {
+      const tabManager = getTabManager()
+
+      // Broadcast to all content views
+      tabManager.broadcastToAllTabs('config:themeChanged', config.theme)
+
+      // Broadcast to tabbar
+      tabManager.broadcastToTabbar('config:themeChanged', config.theme)
+
+      // Broadcast to all BrowserWindows (Settings, etc.)
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('config:themeChanged', config.theme)
+        }
+      }
+    }
   })
 
   // ============================================

@@ -5,6 +5,55 @@ type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P]
 }
 
+type Theme = GlobalConfig['theme']
+
+// ===========================================
+// Theme auto-initialization
+// ===========================================
+
+function applyTheme(theme: Theme): void {
+  const root = document.documentElement
+  if (theme === 'dark') {
+    root.classList.add('dark')
+  } else if (theme === 'light') {
+    root.classList.remove('dark')
+  } else {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    root.classList.toggle('dark', prefersDark)
+  }
+}
+
+function initializeTheme(): void {
+  ipcRenderer.invoke('config:getGlobal').then((config: GlobalConfig) => {
+    applyTheme(config.theme)
+  })
+}
+
+// Listen for theme changes from main process
+ipcRenderer.on('config:themeChanged', (_event, theme: Theme) => {
+  applyTheme(theme)
+})
+
+// Listen for system theme changes
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  ipcRenderer.invoke('config:getGlobal').then((config: GlobalConfig) => {
+    if (config.theme === 'system') {
+      applyTheme('system')
+    }
+  })
+})
+
+// Initialize on DOM ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeTheme)
+} else {
+  initializeTheme()
+}
+
+// ===========================================
+// ConfigAPI Interface
+// ===========================================
+
 export interface ConfigAPI {
   // Global config
   getGlobal: () => Promise<GlobalConfig>
@@ -27,6 +76,9 @@ export interface ConfigAPI {
   resetGlobal: () => Promise<void>
   resetAgent: (agentId: AgentId) => Promise<void>
   resetAll: () => Promise<void>
+
+  // Theme change listener
+  onThemeChanged: (callback: (theme: Theme) => void) => () => void
 }
 
 const configAPI: ConfigAPI = {
@@ -51,6 +103,13 @@ const configAPI: ConfigAPI = {
   resetGlobal: () => ipcRenderer.invoke('config:resetGlobal'),
   resetAgent: (agentId) => ipcRenderer.invoke('config:resetAgent', agentId),
   resetAll: () => ipcRenderer.invoke('config:resetAll'),
+
+  // Theme change listener
+  onThemeChanged: (callback) => {
+    const handler = (_event: Electron.IpcRendererEvent, theme: Theme) => callback(theme)
+    ipcRenderer.on('config:themeChanged', handler)
+    return () => ipcRenderer.removeListener('config:themeChanged', handler)
+  },
 }
 
 contextBridge.exposeInMainWorld('configAPI', configAPI)

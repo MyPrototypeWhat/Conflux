@@ -1,3 +1,6 @@
+// Import config preload to get theme auto-initialization and configAPI
+import './config'
+
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AgentConfig } from '../types/agent'
 import type { CreateTabOptions, Tab } from '../types/tab'

@@ -1,2 +1,2 @@
 export { type ChatMessage, useChat } from './useChat'
-export { initTheme, useTheme } from './useTheme'
+export { useTheme } from './useTheme'

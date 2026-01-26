@@ -6,6 +6,11 @@ import { TabManager } from './tab-manager'
 
 let tabManager: TabManager | null = null
 
+export function getTabManager(): TabManager {
+  if (!tabManager) throw new Error('TabManager not initialized')
+  return tabManager
+}
+
 function setupCORS() {
   // Allow CORS for local A2A servers
   session.defaultSession.webRequest.onHeadersReceived(
