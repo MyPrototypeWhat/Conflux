@@ -7,6 +7,74 @@ type CodexSDK = typeof import('@openai/codex-sdk')
 type Codex = InstanceType<CodexSDK['Codex']>
 type Thread = ReturnType<Codex['startThread']>
 
+// ThreadItem types from @openai/codex-sdk
+interface AgentMessageItem {
+  id: string
+  type: 'agent_message'
+  text: string
+}
+
+interface ReasoningItem {
+  id: string
+  type: 'reasoning'
+  text: string
+}
+
+interface CommandExecutionItem {
+  id: string
+  type: 'command_execution'
+  command: string
+  aggregated_output: string
+  exit_code?: number
+  status: 'in_progress' | 'completed' | 'failed'
+}
+
+interface FileChangeItem {
+  id: string
+  type: 'file_change'
+  changes: Array<{ path: string; kind: 'add' | 'delete' | 'update' }>
+  status: 'completed' | 'failed'
+}
+
+interface McpToolCallItem {
+  id: string
+  type: 'mcp_tool_call'
+  server: string
+  tool: string
+  arguments: unknown
+  result?: { content: unknown[]; structured_content: unknown }
+  error?: { message: string }
+  status: 'in_progress' | 'completed' | 'failed'
+}
+
+interface WebSearchItem {
+  id: string
+  type: 'web_search'
+  query: string
+}
+
+interface TodoListItem {
+  id: string
+  type: 'todo_list'
+  items: Array<{ text: string; completed: boolean }>
+}
+
+interface ErrorItem {
+  id: string
+  type: 'error'
+  message: string
+}
+
+type ThreadItem =
+  | AgentMessageItem
+  | ReasoningItem
+  | CommandExecutionItem
+  | FileChangeItem
+  | McpToolCallItem
+  | WebSearchItem
+  | TodoListItem
+  | ErrorItem
+
 const DEFAULT_PORT = 50002
 
 /**
@@ -280,86 +348,203 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
       // Run Codex with streaming
       const { events } = await thread.runStreamed(text)
 
-      // Track sent text length for each item to calculate delta
+      // Track sent content for each item to calculate delta
       const sentTextLengths = new Map<string, number>()
+      const sentItemStates = new Map<string, string>() // Track last sent state for non-text items
 
       for await (const event of events) {
         console.log('[Codex A2A] Event:', event.type, JSON.stringify(event, null, 2))
 
-        // Handle both item.updated and item.completed for streaming
+        // Handle item events
         if (event.type === 'item.updated' || event.type === 'item.completed') {
-          const item = event.item as {
-            id: string
-            type: string
-            text?: string
+          const item = event.item as ThreadItem & {
             content?: Array<{ type: string; text?: string }>
           }
+          const isCompleted = event.type === 'item.completed'
 
-          // Handle agent_message and reasoning items
-          if ((item.type === 'agent_message' || item.type === 'reasoning') && item.text) {
-            const prevLength = sentTextLengths.get(item.id) || 0
-            const deltaText = item.text.slice(prevLength)
-
-            console.log(
-              `[Codex A2A] Item ${item.id} (${item.type}): prev=${prevLength}, current=${item.text.length}, delta=${deltaText.length}`
-            )
-
-            // Only send if there's new content
-            if (deltaText.length > 0) {
-              sentTextLengths.set(item.id, item.text.length)
-
-              this.sendSSE(res, requestId, {
-                kind: 'status-update',
-                taskId,
-                contextId,
-                status: {
-                  state: 'working',
-                  message: {
-                    kind: 'message',
-                    role: 'agent',
-                    parts: [{ kind: 'text', text: deltaText }],
-                    messageId: crypto.randomUUID(),
-                    taskId,
-                    contextId,
-                    metadata: { itemType: item.type },
-                  },
-                  timestamp: new Date().toISOString(),
-                },
-                final: false,
-              })
-            }
-          }
-
-          // Handle message items with content array (alternative format)
-          if (item.type === 'message' && item.content) {
-            for (const content of item.content) {
-              if (content.type === 'output_text' && content.text) {
-                const contentKey = `${item.id}:${content.type}`
-                const prevLength = sentTextLengths.get(contentKey) || 0
-                const deltaText = content.text.slice(prevLength)
+          switch (item.type) {
+            // Text-based items with streaming support
+            case 'agent_message':
+            case 'reasoning': {
+              const textItem = item as AgentMessageItem | ReasoningItem
+              if (textItem.text) {
+                const prevLength = sentTextLengths.get(textItem.id) || 0
+                const deltaText = textItem.text.slice(prevLength)
 
                 if (deltaText.length > 0) {
-                  sentTextLengths.set(contentKey, content.text.length)
-
-                  this.sendSSE(res, requestId, {
-                    kind: 'status-update',
-                    taskId,
-                    contextId,
-                    status: {
-                      state: 'working',
-                      message: {
-                        kind: 'message',
-                        role: 'agent',
-                        parts: [{ kind: 'text', text: deltaText }],
-                        messageId: crypto.randomUUID(),
-                        taskId,
-                        contextId,
-                        metadata: { itemType: 'agent_message' },
-                      },
-                      timestamp: new Date().toISOString(),
-                    },
-                    final: false,
+                  sentTextLengths.set(textItem.id, textItem.text.length)
+                  this.sendItemMessage(res, requestId, taskId, contextId, {
+                    text: deltaText,
+                    itemType: textItem.type,
                   })
+                }
+              }
+              break
+            }
+
+            // Command execution - show command and output
+            case 'command_execution': {
+              const cmdItem = item as CommandExecutionItem
+              const stateKey = `${cmdItem.id}:state`
+              const outputKey = `${cmdItem.id}:output`
+              const lastState = sentItemStates.get(stateKey)
+
+              // Send command start notification (only once)
+              // Content is empty - command is in metadata, rendered by frontend
+              if (!lastState) {
+                sentItemStates.set(stateKey, 'started')
+                this.sendItemMessage(res, requestId, taskId, contextId, {
+                  text: '', // Empty - just to create the block
+                  itemType: 'command_execution',
+                  metadata: { command: cmdItem.command, status: cmdItem.status },
+                })
+              }
+
+              // Stream output incrementally
+              if (cmdItem.aggregated_output) {
+                const prevLength = sentTextLengths.get(outputKey) || 0
+                const deltaOutput = cmdItem.aggregated_output.slice(prevLength)
+
+                if (deltaOutput.length > 0) {
+                  sentTextLengths.set(outputKey, cmdItem.aggregated_output.length)
+                  this.sendItemMessage(res, requestId, taskId, contextId, {
+                    text: deltaOutput,
+                    itemType: 'command_output',
+                    metadata: { command: cmdItem.command },
+                  })
+                }
+              }
+
+              // Send completion status (metadata only, no extra text)
+              if (isCompleted && lastState !== 'completed') {
+                sentItemStates.set(stateKey, 'completed')
+                this.sendItemMessage(res, requestId, taskId, contextId, {
+                  text: '', // Empty - status is in metadata
+                  itemType: 'command_status',
+                  metadata: {
+                    command: cmdItem.command,
+                    status: cmdItem.status,
+                    exitCode: cmdItem.exit_code,
+                  },
+                })
+              }
+              break
+            }
+
+            // File changes - show file operations
+            case 'file_change': {
+              const fileItem = item as FileChangeItem
+              if (isCompleted) {
+                const changeLines = fileItem.changes
+                  .map((c) => {
+                    const icon = c.kind === 'add' ? '+' : c.kind === 'delete' ? '-' : '~'
+                    return `  ${icon} ${c.path}`
+                  })
+                  .join('\n')
+                const statusIcon = fileItem.status === 'completed' ? '✓' : '✗'
+                this.sendItemMessage(res, requestId, taskId, contextId, {
+                  text: `\n**File Changes** [${statusIcon}]\n${changeLines}\n`,
+                  itemType: 'file_change',
+                  metadata: { changes: fileItem.changes, status: fileItem.status },
+                })
+              }
+              break
+            }
+
+            // MCP tool calls
+            case 'mcp_tool_call': {
+              const mcpItem = item as McpToolCallItem
+              const stateKey = `${mcpItem.id}:state`
+              const lastState = sentItemStates.get(stateKey)
+
+              // Send tool call start
+              if (!lastState) {
+                sentItemStates.set(stateKey, 'started')
+                this.sendItemMessage(res, requestId, taskId, contextId, {
+                  text: `\n**MCP Tool Call**: ${mcpItem.server}/${mcpItem.tool}\n`,
+                  itemType: 'mcp_tool_call',
+                  metadata: {
+                    server: mcpItem.server,
+                    tool: mcpItem.tool,
+                    arguments: mcpItem.arguments,
+                    status: mcpItem.status,
+                  },
+                })
+              }
+
+              // Send completion with result or error
+              if (isCompleted && lastState !== 'completed') {
+                sentItemStates.set(stateKey, 'completed')
+                if (mcpItem.error) {
+                  this.sendItemMessage(res, requestId, taskId, contextId, {
+                    text: `[✗ MCP Error: ${mcpItem.error.message}]\n`,
+                    itemType: 'mcp_tool_error',
+                    metadata: { error: mcpItem.error },
+                  })
+                } else if (mcpItem.result) {
+                  this.sendItemMessage(res, requestId, taskId, contextId, {
+                    text: `[✓ MCP Tool completed]\n`,
+                    itemType: 'mcp_tool_result',
+                    metadata: { result: mcpItem.result },
+                  })
+                }
+              }
+              break
+            }
+
+            // Web search
+            case 'web_search': {
+              const searchItem = item as WebSearchItem
+              this.sendItemMessage(res, requestId, taskId, contextId, {
+                text: `\n**Web Search**: "${searchItem.query}"\n`,
+                itemType: 'web_search',
+                metadata: { query: searchItem.query },
+              })
+              break
+            }
+
+            // Todo list
+            case 'todo_list': {
+              const todoItem = item as TodoListItem
+              const todoLines = todoItem.items
+                .map((t) => `  ${t.completed ? '☑' : '☐'} ${t.text}`)
+                .join('\n')
+              this.sendItemMessage(res, requestId, taskId, contextId, {
+                text: `\n**Todo List**:\n${todoLines}\n`,
+                itemType: 'todo_list',
+                metadata: { items: todoItem.items },
+              })
+              break
+            }
+
+            // Error
+            case 'error': {
+              const errorItem = item as ErrorItem
+              this.sendItemMessage(res, requestId, taskId, contextId, {
+                text: `\n**Error**: ${errorItem.message}\n`,
+                itemType: 'error',
+                metadata: { message: errorItem.message },
+              })
+              break
+            }
+
+            default: {
+              // Handle legacy message format with content array
+              if ('content' in item && Array.isArray(item.content)) {
+                for (const content of item.content) {
+                  if (content.type === 'output_text' && content.text) {
+                    const contentKey = `${item.id}:${content.type}`
+                    const prevLength = sentTextLengths.get(contentKey) || 0
+                    const deltaText = content.text.slice(prevLength)
+
+                    if (deltaText.length > 0) {
+                      sentTextLengths.set(contentKey, content.text.length)
+                      this.sendItemMessage(res, requestId, taskId, contextId, {
+                        text: deltaText,
+                        itemType: 'agent_message',
+                      })
+                    }
+                  }
                 }
               }
             }
@@ -403,6 +588,38 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     }
 
     res.end()
+  }
+
+  private sendItemMessage(
+    res: http.ServerResponse,
+    requestId: string,
+    taskId: string,
+    contextId: string,
+    options: {
+      text: string
+      itemType: string
+      metadata?: Record<string, unknown>
+    }
+  ): void {
+    this.sendSSE(res, requestId, {
+      kind: 'status-update',
+      taskId,
+      contextId,
+      status: {
+        state: 'working',
+        message: {
+          kind: 'message',
+          role: 'agent',
+          parts: [{ kind: 'text', text: options.text }],
+          messageId: crypto.randomUUID(),
+          taskId,
+          contextId,
+          metadata: { itemType: options.itemType, ...options.metadata },
+        },
+        timestamp: new Date().toISOString(),
+      },
+      final: false,
+    })
   }
 
   private sendSSE(res: http.ServerResponse, requestId: string, result: unknown): void {

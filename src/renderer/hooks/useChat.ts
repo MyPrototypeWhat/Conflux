@@ -1,12 +1,29 @@
 import { useCallback, useRef, useState } from 'react'
 
-export type MessageBlockType = 'text' | 'reasoning' | 'tool_call' | 'file_change'
+export type MessageBlockType =
+  | 'text'
+  | 'reasoning'
+  | 'tool_call'
+  | 'file_change'
+  | 'command_execution'
+  | 'web_search'
+  | 'todo_list'
+  | 'error'
 
 export interface MessageBlock {
   id: string
   type: MessageBlockType
   content: string
   isStreaming?: boolean
+  // Additional metadata for specific block types
+  metadata?: {
+    command?: string
+    exitCode?: number
+    status?: string
+    query?: string
+    items?: Array<{ text: string; completed: boolean }>
+    changes?: Array<{ path: string; kind: string }>
+  }
 }
 
 export interface ChatMessage {
@@ -36,7 +53,13 @@ class A2AClient {
   async *sendMessage(
     content: string,
     contextId: string
-  ): AsyncGenerator<{ type: string; text?: string; error?: string; itemType?: string }> {
+  ): AsyncGenerator<{
+    type: string
+    text?: string
+    error?: string
+    itemType?: string
+    metadata?: Record<string, unknown>
+  }> {
     const requestBody = {
       jsonrpc: '2.0',
       method: 'message/stream',
@@ -119,9 +142,10 @@ class A2AClient {
                 // Check for message in status
                 if (message?.parts) {
                   const itemType = message.metadata?.itemType as string | undefined
+                  const metadata = message.metadata as Record<string, unknown> | undefined
                   for (const part of message.parts) {
                     if (part.kind === 'text' && part.text) {
-                      yield { type: 'text_delta', text: part.text, itemType }
+                      yield { type: 'text_delta', text: part.text, itemType, metadata }
                     }
                   }
                 }
@@ -268,12 +292,49 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
 
         for await (const event of client.sendMessage(content, contextId)) {
           if (event.type === 'text_delta' && event.text) {
-            // Map itemType to block type
             const itemType = event.itemType as string | undefined
+            const metadata = event.metadata as Record<string, unknown> | undefined
+
+            // Determine block type and handling strategy
             let blockType: MessageBlockType = 'text'
-            if (itemType === 'reasoning') blockType = 'reasoning'
-            else if (itemType === 'tool_call') blockType = 'tool_call'
-            else if (itemType === 'file_change') blockType = 'file_change'
+            let appendToCommand = false
+
+            // Map itemType to block type
+            switch (itemType) {
+              case 'reasoning':
+                blockType = 'reasoning'
+                break
+              case 'tool_call':
+              case 'mcp_tool_call':
+              case 'mcp_tool_result':
+              case 'mcp_tool_error':
+                blockType = 'tool_call'
+                break
+              case 'file_change':
+                blockType = 'file_change'
+                break
+              case 'command_execution':
+                blockType = 'command_execution'
+                break
+              case 'command_output':
+              case 'command_status':
+                // These should append to the last command_execution block
+                blockType = 'command_execution'
+                appendToCommand = true
+                break
+              case 'web_search':
+                blockType = 'web_search'
+                break
+              case 'todo_list':
+                blockType = 'todo_list'
+                break
+              case 'error':
+                blockType = 'error'
+                break
+              case 'agent_message':
+              default:
+                blockType = 'text'
+            }
 
             // Update message with new block content
             setMessages((prev) =>
@@ -281,10 +342,29 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
                 if (msg.id !== assistantMessageId) return msg
 
                 const blocks = [...msg.blocks]
-                // Find last block of same type that's streaming
                 const lastBlockIndex = blocks.length - 1
                 const lastBlock = blocks[lastBlockIndex]
 
+                // Special handling for command output/status - always append to last command block
+                if (appendToCommand && lastBlock?.type === 'command_execution') {
+                  const updatedMetadata = { ...lastBlock.metadata }
+
+                  // Update status and exitCode from command_status
+                  if (itemType === 'command_status' && metadata) {
+                    if (metadata.status) updatedMetadata.status = metadata.status as string
+                    if (metadata.exitCode !== undefined)
+                      updatedMetadata.exitCode = metadata.exitCode as number
+                  }
+
+                  blocks[lastBlockIndex] = {
+                    ...lastBlock,
+                    content: lastBlock.content + event.text,
+                    metadata: updatedMetadata,
+                  }
+                  return { ...msg, blocks }
+                }
+
+                // Normal handling - append to same type or create new block
                 if (lastBlock && lastBlock.type === blockType && lastBlock.isStreaming) {
                   // Append to existing block
                   blocks[lastBlockIndex] = {
@@ -293,14 +373,38 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
                   }
                 } else {
                   // Mark previous block as done (if exists) and create new block
-                  if (lastBlock && lastBlock.isStreaming) {
+                  if (lastBlock?.isStreaming) {
                     blocks[lastBlockIndex] = { ...lastBlock, isStreaming: false }
                   }
+
+                  // Build metadata for new block
+                  const blockMetadata: MessageBlock['metadata'] = {}
+                  if (blockType === 'command_execution' && metadata?.command) {
+                    blockMetadata.command = metadata.command as string
+                    blockMetadata.status = metadata.status as string
+                  }
+                  if (blockType === 'web_search' && metadata?.query) {
+                    blockMetadata.query = metadata.query as string
+                  }
+                  if (blockType === 'todo_list' && metadata?.items) {
+                    blockMetadata.items = metadata.items as Array<{
+                      text: string
+                      completed: boolean
+                    }>
+                  }
+                  if (blockType === 'file_change' && metadata?.changes) {
+                    blockMetadata.changes = metadata.changes as Array<{
+                      path: string
+                      kind: string
+                    }>
+                  }
+
                   blocks.push({
                     id: crypto.randomUUID(),
                     type: blockType,
                     content: event.text || '',
                     isStreaming: true,
+                    metadata: Object.keys(blockMetadata).length > 0 ? blockMetadata : undefined,
                   })
                 }
 
