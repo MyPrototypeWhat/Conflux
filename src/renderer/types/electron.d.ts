@@ -1,11 +1,9 @@
 export interface ElectronAPI {
-  ping: () => Promise<string>;
+  ping: () => Promise<string>
 }
 
 declare global {
   interface Window {
-    electronAPI: ElectronAPI;
+    electronAPI: ElectronAPI
   }
 }
-
-export {};

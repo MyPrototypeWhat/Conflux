@@ -1,6 +1,6 @@
-import { contextBridge, ipcRenderer } from "electron"
-import type { Tab, CreateTabOptions } from "../types/tab"
-import type { AgentConfig } from "../types/agent"
+import { contextBridge, ipcRenderer } from 'electron'
+import type { AgentConfig } from '../types/agent'
+import type { CreateTabOptions, Tab } from '../types/tab'
 
 export interface TabbarAPI {
   createTab: (options: CreateTabOptions) => Promise<Tab>
@@ -16,14 +16,13 @@ export interface TabbarAPI {
 }
 
 const tabbarAPI: TabbarAPI = {
-  createTab: (options) => ipcRenderer.invoke("tab:create", options),
-  switchTab: (tabId) => ipcRenderer.invoke("tab:switch", tabId),
-  closeTab: (tabId) => ipcRenderer.invoke("tab:close", tabId),
-  getAllTabs: () => ipcRenderer.invoke("tab:getAll"),
-  getActiveTab: () => ipcRenderer.invoke("tab:getActive"),
-  reorderTabs: (fromIndex, toIndex) =>
-    ipcRenderer.invoke("tab:reorder", fromIndex, toIndex),
-  getAgents: () => ipcRenderer.invoke("agent:getAll"),
+  createTab: (options) => ipcRenderer.invoke('tab:create', options),
+  switchTab: (tabId) => ipcRenderer.invoke('tab:switch', tabId),
+  closeTab: (tabId) => ipcRenderer.invoke('tab:close', tabId),
+  getAllTabs: () => ipcRenderer.invoke('tab:getAll'),
+  getActiveTab: () => ipcRenderer.invoke('tab:getActive'),
+  reorderTabs: (fromIndex, toIndex) => ipcRenderer.invoke('tab:reorder', fromIndex, toIndex),
+  getAgents: () => ipcRenderer.invoke('agent:getAll'),
   onTabsUpdated: (callback) => {
     const handler = (
       _event: Electron.IpcRendererEvent,
@@ -31,14 +30,14 @@ const tabbarAPI: TabbarAPI = {
     ) => {
       callback(data)
     }
-    ipcRenderer.on("tabs:updated", handler)
+    ipcRenderer.on('tabs:updated', handler)
     return () => {
-      ipcRenderer.removeListener("tabs:updated", handler)
+      ipcRenderer.removeListener('tabs:updated', handler)
     }
   },
 }
 
-contextBridge.exposeInMainWorld("tabbarAPI", tabbarAPI)
+contextBridge.exposeInMainWorld('tabbarAPI', tabbarAPI)
 
 declare global {
   interface Window {

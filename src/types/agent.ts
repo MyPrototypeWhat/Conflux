@@ -1,4 +1,4 @@
-export type AgentStatus = "pending" | "connected" | "error"
+export type AgentStatus = 'pending' | 'connected' | 'error'
 
 export interface AgentConfig {
   id: string
@@ -15,18 +15,23 @@ export interface AgentState {
 
 export const AGENTS: AgentConfig[] = [
   {
-    id: "claude-code",
-    name: "Claude Code",
+    id: 'new-tab',
+    name: 'New Tab',
+    description: 'Select an agent to get started',
+  },
+  {
+    id: 'claude-code',
+    name: 'Claude Code',
     description: "Anthropic's CLI coding assistant",
   },
   {
-    id: "codex",
-    name: "Codex",
+    id: 'codex',
+    name: 'Codex',
     description: "OpenAI's code generation agent",
   },
   {
-    id: "gemini-cli",
-    name: "Gemini CLI",
+    id: 'gemini-cli',
+    name: 'Gemini CLI',
     description: "Google's terminal AI agent",
   },
 ]

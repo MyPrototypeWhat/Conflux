@@ -1,8 +1,8 @@
-import { BaseWindow, WebContentsView } from "electron"
-import { join } from "path"
-import { is } from "@electron-toolkit/utils"
-import type { Tab, CreateTabOptions } from "../types/tab"
-import { AGENTS } from "../types/agent"
+import { join } from 'node:path'
+import { is } from '@electron-toolkit/utils'
+import { type BaseWindow, WebContentsView } from 'electron'
+import { AGENTS } from '../types/agent'
+import type { CreateTabOptions, Tab } from '../types/tab'
 
 const TABBAR_HEIGHT = 48
 
@@ -20,22 +20,22 @@ export class TabManager {
     this.mainWindow.contentView.addChildView(this.tabbarView)
     this.updateLayout()
 
-    mainWindow.on("resize", () => this.updateLayout())
+    mainWindow.on('resize', () => this.updateLayout())
   }
 
   private createTabbarView(): WebContentsView {
     const view = new WebContentsView({
       webPreferences: {
-        preload: join(__dirname, "../preload/tabbar.js"),
+        preload: join(__dirname, '../preload/tabbar.js'),
         contextIsolation: true,
         nodeIntegration: false,
       },
     })
 
-    if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
-      view.webContents.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}/tabbar/`)
+    if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+      view.webContents.loadURL(`${process.env.ELECTRON_RENDERER_URL}/tabbar/`)
     } else {
-      view.webContents.loadFile(join(__dirname, "../renderer/tabbar/index.html"))
+      view.webContents.loadFile(join(__dirname, '../renderer/tabbar/index.html'))
     }
 
     return view
@@ -59,7 +59,7 @@ export class TabManager {
     }
 
     if (!title) {
-      title = "New Tab"
+      title = 'New Tab'
     }
 
     const tab: Tab = {
@@ -71,7 +71,7 @@ export class TabManager {
 
     const view = new WebContentsView({
       webPreferences: {
-        preload: join(__dirname, "../preload/agent.js"),
+        preload: join(__dirname, '../preload/agent.js'),
         contextIsolation: true,
         nodeIntegration: false,
       },
@@ -79,17 +79,19 @@ export class TabManager {
 
     const rendererPath = this.getRendererPath(options.agentId!)
 
-    if (is.dev && process.env["ELECTRON_RENDERER_URL"]) {
-      view.webContents.loadURL(`${process.env["ELECTRON_RENDERER_URL"]}/${rendererPath}/`)
+    if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+      view.webContents.loadURL(`${process.env.ELECTRON_RENDERER_URL}/${rendererPath}/`)
     } else {
-      view.webContents.loadFile(
-        join(__dirname, `../renderer/${rendererPath}/index.html`)
-      )
+      view.webContents.loadFile(join(__dirname, `../renderer/${rendererPath}/index.html`))
     }
 
     this.contentViews.set(id, view)
     this.tabs.push(tab)
     this.mainWindow.contentView.addChildView(view)
+
+    // Ensure tabbar stays on top by re-adding it
+    this.mainWindow.contentView.removeChildView(this.tabbarView)
+    this.mainWindow.contentView.addChildView(this.tabbarView)
 
     this.switchToTab(id)
     this.notifyTabbarUpdate()
@@ -159,7 +161,7 @@ export class TabManager {
   }
 
   private updateLayout(): void {
-    const bounds = this.mainWindow.getBounds()
+    const bounds = this.mainWindow.getContentBounds()
     const contentWidth = bounds.width
     const contentHeight = bounds.height
 
@@ -183,7 +185,7 @@ export class TabManager {
   }
 
   private notifyTabbarUpdate(): void {
-    this.tabbarView.webContents.send("tabs:updated", {
+    this.tabbarView.webContents.send('tabs:updated', {
       tabs: this.tabs,
       activeTabId: this.activeTabId,
     })
@@ -196,5 +198,74 @@ export class TabManager {
     const [tab] = this.tabs.splice(fromIndex, 1)
     this.tabs.splice(toIndex, 0, tab)
     this.notifyTabbarUpdate()
+  }
+
+  replaceTabAgent(tabId: string, newAgentId: string): boolean {
+    const oldView = this.contentViews.get(tabId)
+    if (!oldView) return false
+
+    const tabIndex = this.tabs.findIndex((t) => t.id === tabId)
+    if (tabIndex === -1) return false
+
+    // Get new agent info
+    const agent = AGENTS.find((a) => a.id === newAgentId)
+    const newTitle = agent?.name || newAgentId
+
+    // Remove old view
+    this.mainWindow.contentView.removeChildView(oldView)
+    oldView.webContents.close()
+
+    // Create new view
+    const newView = new WebContentsView({
+      webPreferences: {
+        preload: join(__dirname, '../preload/agent.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+
+    const rendererPath = this.getRendererPath(newAgentId)
+
+    if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+      newView.webContents.loadURL(`${process.env.ELECTRON_RENDERER_URL}/${rendererPath}/`)
+    } else {
+      newView.webContents.loadFile(join(__dirname, `../renderer/${rendererPath}/index.html`))
+    }
+
+    // Update contentViews map
+    this.contentViews.set(tabId, newView)
+    this.mainWindow.contentView.addChildView(newView)
+
+    // Ensure tabbar stays on top
+    this.mainWindow.contentView.removeChildView(this.tabbarView)
+    this.mainWindow.contentView.addChildView(this.tabbarView)
+
+    // Update tab info
+    this.tabs[tabIndex] = {
+      ...this.tabs[tabIndex],
+      agentId: newAgentId,
+      title: newTitle,
+    }
+
+    // Refresh layout and visibility
+    this.updateLayout()
+
+    // Set visibility for all views
+    for (const [id, v] of this.contentViews) {
+      v.setVisible(id === tabId)
+    }
+
+    this.notifyTabbarUpdate()
+    return true
+  }
+
+  openDevTools(): void {
+    // Open DevTools for the active tab
+    if (this.activeTabId) {
+      const view = this.contentViews.get(this.activeTabId)
+      if (view) {
+        view.webContents.openDevTools()
+      }
+    }
   }
 }
