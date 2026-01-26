@@ -61,6 +61,13 @@ export interface GeminiConfig extends BaseAgentConfig {
 // Claude Code Configuration
 // ============================================
 
+export interface ClaudeCodeA2AServerConfig {
+  /** A2A server port */
+  port: number
+  /** Auto-start A2A server when connecting */
+  autoStart: boolean
+}
+
 export interface ClaudeCodeConfig extends BaseAgentConfig {
   /** Model to use */
   model: string
@@ -70,6 +77,12 @@ export interface ClaudeCodeConfig extends BaseAgentConfig {
   dangerousMode: boolean
   /** Allowed commands pattern */
   allowedCommands: string[]
+  /** A2A server settings */
+  a2aServer: ClaudeCodeA2AServerConfig
+  /** Allowed tools (empty = all) */
+  allowedTools: string[]
+  /** Session timeout in milliseconds */
+  sessionTimeout: number
 }
 
 // ============================================
@@ -142,6 +155,12 @@ export const DEFAULT_CLAUDE_CODE_CONFIG: ClaudeCodeConfig = {
   maxTokens: 8192,
   dangerousMode: false,
   allowedCommands: [],
+  a2aServer: {
+    port: 50003,
+    autoStart: true,
+  },
+  allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+  sessionTimeout: 3600000, // 1 hour
 }
 
 export const DEFAULT_CODEX_CONFIG: CodexConfig = {

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import type { A2AMessage, AgentAdapter, AgentEvent, AgentStatusUpdate } from '../types/a2a'
+import { ClaudeCodeAdapter } from './agents/claude-code-adapter'
 import { CodexAdapter } from './agents/codex-adapter'
 import { GeminiAdapter } from './agents/gemini-adapter'
 
@@ -38,7 +39,12 @@ export class AgentManager extends EventEmitter {
     })
     this.adapters.set(codexAdapter.id, codexAdapter)
 
-    // TODO: Register Claude Code adapter
+    // Register Claude Code adapter
+    const claudeCodeAdapter = new ClaudeCodeAdapter()
+    claudeCodeAdapter.on('status', (status: AgentStatusUpdate) => {
+      this.emit('agent:status', { ...status, agentId: claudeCodeAdapter.id })
+    })
+    this.adapters.set(claudeCodeAdapter.id, claudeCodeAdapter)
   }
 
   getAdapter(agentId: string): AgentAdapter | undefined {
