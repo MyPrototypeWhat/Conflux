@@ -10,6 +10,7 @@ export interface TabbarAPI {
   getActiveTab: () => Promise<Tab | null>
   reorderTabs: (fromIndex: number, toIndex: number) => Promise<Tab[]>
   getAgents: () => Promise<AgentConfig[]>
+  openSettings: () => Promise<void>
   onTabsUpdated: (
     callback: (data: { tabs: Tab[]; activeTabId: string | null }) => void
   ) => () => void
@@ -23,6 +24,7 @@ const tabbarAPI: TabbarAPI = {
   getActiveTab: () => ipcRenderer.invoke('tab:getActive'),
   reorderTabs: (fromIndex, toIndex) => ipcRenderer.invoke('tab:reorder', fromIndex, toIndex),
   getAgents: () => ipcRenderer.invoke('agent:getAll'),
+  openSettings: () => ipcRenderer.invoke('settings:open'),
   onTabsUpdated: (callback) => {
     const handler = (
       _event: Electron.IpcRendererEvent,

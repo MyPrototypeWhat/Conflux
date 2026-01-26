@@ -268,4 +268,14 @@ export class TabManager {
       }
     }
   }
+
+  broadcastToAllTabs(channel: string, data: unknown): void {
+    for (const view of this.contentViews.values()) {
+      view.webContents.send(channel, data)
+    }
+  }
+
+  getActiveTabId(): string | null {
+    return this.activeTabId
+  }
 }

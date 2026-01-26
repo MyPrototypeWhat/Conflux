@@ -20,6 +20,7 @@ export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      watch: {},
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
@@ -30,6 +31,7 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      watch: {},
       rollupOptions: {
         input: {
           tabbar: resolve(__dirname, 'src/preload/tabbar.ts'),

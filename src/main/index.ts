@@ -1,9 +1,35 @@
 import { is } from '@electron-toolkit/utils'
-import { app, BaseWindow, globalShortcut } from 'electron'
+import { app, BaseWindow, globalShortcut, session } from 'electron'
 import { setupIPCHandlers } from './ipc-handlers'
+import { closeDatabase, initializeDatabase } from './storage'
 import { TabManager } from './tab-manager'
 
 let tabManager: TabManager | null = null
+
+function setupCORS() {
+  // Allow CORS for local A2A servers
+  session.defaultSession.webRequest.onHeadersReceived(
+    { urls: ['http://localhost:*/*'] },
+    (details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Access-Control-Allow-Origin': ['*'],
+          'Access-Control-Allow-Methods': ['GET, POST, PUT, DELETE, OPTIONS'],
+          'Access-Control-Allow-Headers': ['Content-Type, Accept'],
+        },
+      })
+    }
+  )
+
+  // Handle preflight OPTIONS requests
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['http://localhost:*/*'] },
+    (details, callback) => {
+      callback({ requestHeaders: details.requestHeaders })
+    }
+  )
+}
 
 function createWindow() {
   const mainWindow = new BaseWindow({
@@ -33,6 +59,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Initialize database
+  initializeDatabase()
+
+  setupCORS()
   createWindow()
 
   app.on('activate', () => {
@@ -46,4 +76,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('will-quit', () => {
+  // Close database connection
+  closeDatabase()
 })
