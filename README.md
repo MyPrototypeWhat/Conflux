@@ -1,16 +1,14 @@
 # Conflux
 
-A2A Agent Aggregation Platform - Unified desktop client for Claude Code, Codex, and Gemini CLI.
+A unified AI Agent desktop client that brings Claude Code, Codex, Gemini CLI and other AI coding assistants together in one application.
 
-## Tech Stack
+## Features
 
-- **Framework**: Electron 40 + electron-vite
-- **Frontend**: React 19 + TypeScript
-- **UI**: shadcn/ui (lyra style) + Tailwind CSS 4
-- **Protocol**: A2A (Agent-to-Agent)
-- **UI Protocol**: A2UI (Progressive shadcn renderer)
+- **Multi-Agent Tab Management** - Run multiple AI Agents simultaneously in one window, switch between them like browser tabs
+- **Unified Experience** - Consistent interface and interactions across all Agents
+- **Quick Agent Switching** - Launch different AI Agents with one click from the New Tab page
 
-## Development
+## Getting Started
 
 ```bash
 # Install dependencies
@@ -26,31 +24,28 @@ pnpm build
 pnpm build:dist
 ```
 
-## Project Structure
+## Supported Agents
 
-```
-conflux/
-├── src/
-│   ├── main/                 # Electron main process
-│   │   └── index.ts
-│   ├── preload/              # Preload scripts
-│   │   └── index.ts
-│   └── renderer/             # Renderer process (React)
-│       ├── components/ui/    # shadcn components
-│       ├── lib/utils.ts
-│       ├── types/electron.d.ts
-│       ├── App.tsx
-│       ├── index.tsx
-│       └── index.css
-├── electron.vite.config.ts   # electron-vite config
-├── components.json           # shadcn config
-└── out/                      # Build output
-```
+| Agent | Provider | Description |
+|-------|----------|-------------|
+| Claude Code | Anthropic | CLI coding assistant |
+| Codex | OpenAI | Code generation agent |
+| Gemini CLI | Google | Terminal AI agent |
 
 ## Roadmap
 
-- [ ] A2UI renderer base components
-- [ ] A2A protocol implementation
-- [ ] Claude Code adapter
-- [ ] Codex adapter
-- [ ] Gemini CLI adapter
+### Dynamic UI Rendering
+- [ ] Agents can dynamically generate interactive UI components based on task context
+- [ ] Support for forms, buttons, code previews and other rich interface elements
+- [ ] Progressive loading with smooth display of Agent's reasoning and execution process
+
+### Multi-Agent Collaboration
+- [ ] Agents can invoke each other and hand off tasks
+- [ ] Split complex tasks across multiple Agents for parallel processing
+- [ ] Unified task status tracking and result aggregation
+
+### Agent Adapters
+- [ ] Claude Code full integration
+- [ ] Codex full integration
+- [ ] Gemini CLI full integration
+- [ ] Custom Agent onboarding support
