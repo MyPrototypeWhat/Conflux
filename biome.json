@@ -68,6 +68,9 @@
           },
           "a11y": {
             "useButtonType": "off"
+          },
+          "security": {
+            "noDangerouslySetInnerHtml": "off"
           }
         }
       }

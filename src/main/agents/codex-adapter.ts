@@ -1,79 +1,7 @@
 import { EventEmitter } from 'node:events'
 import http from 'node:http'
+import type { Codex, Thread } from '@openai/codex-sdk'
 import type { A2AMessage, AgentAdapter, AgentCapabilities, AgentEvent } from '../../types/a2a'
-
-// Codex SDK types (will be imported dynamically to avoid bundling issues)
-type CodexSDK = typeof import('@openai/codex-sdk')
-type Codex = InstanceType<CodexSDK['Codex']>
-type Thread = ReturnType<Codex['startThread']>
-
-// ThreadItem types from @openai/codex-sdk
-interface AgentMessageItem {
-  id: string
-  type: 'agent_message'
-  text: string
-}
-
-interface ReasoningItem {
-  id: string
-  type: 'reasoning'
-  text: string
-}
-
-interface CommandExecutionItem {
-  id: string
-  type: 'command_execution'
-  command: string
-  aggregated_output: string
-  exit_code?: number
-  status: 'in_progress' | 'completed' | 'failed'
-}
-
-interface FileChangeItem {
-  id: string
-  type: 'file_change'
-  changes: Array<{ path: string; kind: 'add' | 'delete' | 'update' }>
-  status: 'completed' | 'failed'
-}
-
-interface McpToolCallItem {
-  id: string
-  type: 'mcp_tool_call'
-  server: string
-  tool: string
-  arguments: unknown
-  result?: { content: unknown[]; structured_content: unknown }
-  error?: { message: string }
-  status: 'in_progress' | 'completed' | 'failed'
-}
-
-interface WebSearchItem {
-  id: string
-  type: 'web_search'
-  query: string
-}
-
-interface TodoListItem {
-  id: string
-  type: 'todo_list'
-  items: Array<{ text: string; completed: boolean }>
-}
-
-interface ErrorItem {
-  id: string
-  type: 'error'
-  message: string
-}
-
-type ThreadItem =
-  | AgentMessageItem
-  | ReasoningItem
-  | CommandExecutionItem
-  | FileChangeItem
-  | McpToolCallItem
-  | WebSearchItem
-  | TodoListItem
-  | ErrorItem
 
 const DEFAULT_PORT = 50002
 
@@ -170,7 +98,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
           this.serverUrl = `http://localhost:${port}`
           this.connected = true
           console.log('[Codex A2A] Server started on', this.serverUrl)
-          this.emit('status', { status: 'connected', serverUrl: this.serverUrl })
+          this.emit('status', {
+            status: 'connected',
+            serverUrl: this.serverUrl,
+          })
           resolve()
         })
 
@@ -273,7 +204,11 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
         await this.handleMessageStream(request, res)
       } else {
         res.writeHead(400, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ error: { code: -32601, message: 'Method not found' } }))
+        res.end(
+          JSON.stringify({
+            error: { code: -32601, message: 'Method not found' },
+          })
+        )
       }
     } catch (error) {
       console.error('[Codex A2A] Error:', error)
@@ -332,6 +267,9 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
       if (!thread) {
         thread = this.codex!.startThread({
           skipGitRepoCheck: true, // Allow running outside git repos
+          webSearchEnabled: true,
+          networkAccessEnabled: true,
+          webSearchMode: 'live',
         })
         this.threads.set(contextId, thread)
       }
@@ -357,16 +295,14 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
         // Handle item events
         if (event.type === 'item.updated' || event.type === 'item.completed') {
-          const item = event.item as ThreadItem & {
-            content?: Array<{ type: string; text?: string }>
-          }
+          const item = event.item
           const isCompleted = event.type === 'item.completed'
 
           switch (item.type) {
             // Text-based items with streaming support
             case 'agent_message':
             case 'reasoning': {
-              const textItem = item as AgentMessageItem | ReasoningItem
+              const textItem = item
               if (textItem.text) {
                 const prevLength = sentTextLengths.get(textItem.id) || 0
                 const deltaText = textItem.text.slice(prevLength)
@@ -384,7 +320,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
             // Command execution - show command and output
             case 'command_execution': {
-              const cmdItem = item as CommandExecutionItem
+              const cmdItem = item
               const stateKey = `${cmdItem.id}:state`
               const outputKey = `${cmdItem.id}:output`
               const lastState = sentItemStates.get(stateKey)
@@ -396,7 +332,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
                 this.sendItemMessage(res, requestId, taskId, contextId, {
                   text: '', // Empty - just to create the block
                   itemType: 'command_execution',
-                  metadata: { command: cmdItem.command, status: cmdItem.status },
+                  metadata: {
+                    command: cmdItem.command,
+                    status: cmdItem.status,
+                  },
                 })
               }
 
@@ -433,7 +372,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
             // File changes - show file operations
             case 'file_change': {
-              const fileItem = item as FileChangeItem
+              const fileItem = item
               if (isCompleted) {
                 const changeLines = fileItem.changes
                   .map((c) => {
@@ -445,7 +384,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
                 this.sendItemMessage(res, requestId, taskId, contextId, {
                   text: `\n**File Changes** [${statusIcon}]\n${changeLines}\n`,
                   itemType: 'file_change',
-                  metadata: { changes: fileItem.changes, status: fileItem.status },
+                  metadata: {
+                    changes: fileItem.changes,
+                    status: fileItem.status,
+                  },
                 })
               }
               break
@@ -453,7 +395,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
             // MCP tool calls
             case 'mcp_tool_call': {
-              const mcpItem = item as McpToolCallItem
+              const mcpItem = item
               const stateKey = `${mcpItem.id}:state`
               const lastState = sentItemStates.get(stateKey)
 
@@ -494,7 +436,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
             // Web search
             case 'web_search': {
-              const searchItem = item as WebSearchItem
+              const searchItem = item
               this.sendItemMessage(res, requestId, taskId, contextId, {
                 text: `\n**Web Search**: "${searchItem.query}"\n`,
                 itemType: 'web_search',
@@ -505,7 +447,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
             // Todo list
             case 'todo_list': {
-              const todoItem = item as TodoListItem
+              const todoItem = item
               const todoLines = todoItem.items
                 .map((t) => `  ${t.completed ? '☑' : '☐'} ${t.text}`)
                 .join('\n')
@@ -519,7 +461,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
 
             // Error
             case 'error': {
-              const errorItem = item as ErrorItem
+              const errorItem = item
               this.sendItemMessage(res, requestId, taskId, contextId, {
                 text: `\n**Error**: ${errorItem.message}\n`,
                 itemType: 'error',
