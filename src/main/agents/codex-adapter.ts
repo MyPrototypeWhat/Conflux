@@ -1,15 +1,376 @@
 import { EventEmitter } from 'node:events'
 import http from 'node:http'
+import type { AgentCard, Message, Task, TaskStatusUpdateEvent } from '@a2a-js/sdk'
+import { AGENT_CARD_PATH } from '@a2a-js/sdk'
+import {
+  type AgentExecutor,
+  DefaultRequestHandler,
+  type ExecutionEventBus,
+  InMemoryTaskStore,
+  type RequestContext,
+} from '@a2a-js/sdk/server'
+import {
+  agentCardHandler,
+  jsonRpcHandler,
+  restHandler,
+  UserBuilder,
+} from '@a2a-js/sdk/server/express'
 import type { Codex, Thread } from '@openai/codex-sdk'
+import express from 'express'
 import type { A2AMessage, AgentAdapter, AgentCapabilities, AgentEvent } from '../../types/a2a'
 
 const DEFAULT_PORT = 50002
 
+class CodexExecutor implements AgentExecutor {
+  private threads: Map<string, Thread>
+  private canceledTasks = new Set<string>()
+  private taskContexts = new Map<string, string>()
+
+  constructor(private codex: Codex) {
+    this.threads = new Map()
+  }
+
+  async execute(requestContext: RequestContext, eventBus: ExecutionEventBus): Promise<void> {
+    const { taskId, contextId, userMessage, task } = requestContext
+    const timestamp = new Date().toISOString()
+    this.taskContexts.set(taskId, contextId)
+
+    if (!task) {
+      const initialTask: Task = {
+        kind: 'task',
+        id: taskId,
+        contextId,
+        status: { state: 'submitted', timestamp },
+        history: [userMessage],
+      }
+      eventBus.publish(initialTask)
+    }
+
+    this.publishStatus(eventBus, taskId, contextId, 'working', false, undefined, 'state-change')
+
+    if (this.canceledTasks.has(taskId)) {
+      this.publishCanceled(eventBus, taskId, contextId)
+      return
+    }
+
+    const text = userMessage.parts
+      .filter((part): part is { kind: 'text'; text: string } => part.kind === 'text')
+      .map((part) => part.text)
+      .join('\n')
+
+    if (!text) {
+      this.publishFailure(eventBus, taskId, contextId, 'No text content')
+      return
+    }
+
+    let thread = this.threads.get(contextId)
+    if (!thread) {
+      thread = this.codex.startThread({
+        skipGitRepoCheck: true,
+        webSearchEnabled: true,
+        networkAccessEnabled: true,
+        webSearchMode: 'live',
+      })
+      this.threads.set(contextId, thread)
+    }
+
+    const { events } = await thread.runStreamed(text)
+    const sentTextLengths = new Map<string, number>()
+    const sentItemStates = new Map<string, string>()
+
+    for await (const event of events) {
+      if (this.canceledTasks.has(taskId)) {
+        this.publishCanceled(eventBus, taskId, contextId)
+        return
+      }
+
+      if (event.type === 'item.updated' || event.type === 'item.completed') {
+        const item = event.item
+        const isCompleted = event.type === 'item.completed'
+
+        switch (item.type) {
+          case 'agent_message':
+          case 'reasoning': {
+            if (item.text) {
+              const prevLength = sentTextLengths.get(item.id) || 0
+              const deltaText = item.text.slice(prevLength)
+              if (deltaText.length > 0) {
+                sentTextLengths.set(item.id, item.text.length)
+                if (item.type === 'reasoning') {
+                  this.publishThought(eventBus, taskId, contextId, deltaText)
+                } else {
+                  this.publishTextContent(eventBus, taskId, contextId, deltaText)
+                }
+              }
+            }
+            break
+          }
+          case 'command_execution': {
+            const stateKey = `${item.id}:state`
+            const outputKey = `${item.id}:output`
+            const lastState = sentItemStates.get(stateKey)
+
+            if (!lastState) {
+              sentItemStates.set(stateKey, 'started')
+              this.publishToolUpdate(eventBus, taskId, contextId, {
+                request: { callId: item.id, name: 'command_execution' },
+                status: item.status,
+                command: item.command,
+              })
+            }
+
+            if (item.aggregated_output) {
+              const prevLength = sentTextLengths.get(outputKey) || 0
+              const deltaOutput = item.aggregated_output.slice(prevLength)
+              if (deltaOutput.length > 0) {
+                sentTextLengths.set(outputKey, item.aggregated_output.length)
+                this.publishToolOutput(
+                  eventBus,
+                  taskId,
+                  contextId,
+                  item.id,
+                  deltaOutput,
+                  true,
+                  isCompleted
+                )
+              }
+            }
+
+            if (isCompleted && lastState !== 'completed') {
+              sentItemStates.set(stateKey, 'completed')
+              this.publishToolUpdate(eventBus, taskId, contextId, {
+                request: { callId: item.id, name: 'command_execution' },
+                status: item.status,
+                command: item.command,
+                exitCode: item.exit_code,
+              })
+            }
+            break
+          }
+          case 'file_change': {
+            if (isCompleted) {
+              this.publishToolUpdate(eventBus, taskId, contextId, {
+                request: { callId: item.id, name: 'file_change' },
+                status: item.status,
+                changes: item.changes,
+              })
+            }
+            break
+          }
+          case 'mcp_tool_call': {
+            const stateKey = `${item.id}:state`
+            const lastState = sentItemStates.get(stateKey)
+
+            if (!lastState) {
+              sentItemStates.set(stateKey, 'started')
+              this.publishToolUpdate(eventBus, taskId, contextId, {
+                request: { callId: item.id, name: 'mcp_tool_call' },
+                status: item.status,
+                server: item.server,
+                tool: item.tool,
+                arguments: item.arguments,
+              })
+            }
+
+            if (isCompleted && lastState !== 'completed') {
+              sentItemStates.set(stateKey, 'completed')
+              if (item.error) {
+                this.publishToolUpdate(eventBus, taskId, contextId, {
+                  request: { callId: item.id, name: 'mcp_tool_call' },
+                  status: 'failed',
+                  error: item.error,
+                })
+              } else if (item.result) {
+                this.publishToolUpdate(eventBus, taskId, contextId, {
+                  request: { callId: item.id, name: 'mcp_tool_call' },
+                  status: 'completed',
+                  result: item.result,
+                })
+              }
+            }
+            break
+          }
+          case 'web_search': {
+            this.publishToolUpdate(eventBus, taskId, contextId, {
+              request: { callId: item.id, name: 'web_search' },
+              status: 'completed',
+              query: item.query,
+            })
+            break
+          }
+          case 'todo_list': {
+            this.publishToolUpdate(eventBus, taskId, contextId, {
+              request: { callId: item.id, name: 'todo_list' },
+              status: 'updated',
+              items: item.items,
+            })
+            break
+          }
+          case 'error': {
+            this.publishTextContent(eventBus, taskId, contextId, `Error: ${item.message}`)
+            break
+          }
+          default: {
+            if ('content' in item && Array.isArray(item.content)) {
+              for (const content of item.content) {
+                if (content.type === 'output_text' && content.text) {
+                  const contentKey = `${item.id}:${content.type}`
+                  const prevLength = sentTextLengths.get(contentKey) || 0
+                  const deltaText = content.text.slice(prevLength)
+                  if (deltaText.length > 0) {
+                    sentTextLengths.set(contentKey, content.text.length)
+                    this.publishTextContent(eventBus, taskId, contextId, deltaText)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    this.publishStatus(eventBus, taskId, contextId, 'completed', true, undefined, 'state-change')
+    eventBus.finished()
+  }
+
+  async cancelTask(taskId: string, eventBus: ExecutionEventBus): Promise<void> {
+    this.canceledTasks.add(taskId)
+    const contextId = this.taskContexts.get(taskId)
+    this.publishCanceled(eventBus, taskId, contextId)
+    eventBus.finished()
+  }
+
+  private publishStatus(
+    eventBus: ExecutionEventBus,
+    taskId: string,
+    contextId: string,
+    state: TaskStatusUpdateEvent['status']['state'],
+    final = false,
+    message?: Message,
+    codexAgentKind?: string
+  ) {
+    eventBus.publish({
+      kind: 'status-update',
+      taskId,
+      contextId,
+      status: {
+        state,
+        message,
+        timestamp: new Date().toISOString(),
+      },
+      final,
+      metadata: codexAgentKind ? { codexAgent: { kind: codexAgentKind } } : undefined,
+    } satisfies TaskStatusUpdateEvent)
+  }
+
+  private publishTextContent(
+    eventBus: ExecutionEventBus,
+    taskId: string,
+    contextId: string,
+    text: string
+  ) {
+    const message: Message = {
+      kind: 'message',
+      role: 'agent',
+      messageId: crypto.randomUUID(),
+      taskId,
+      contextId,
+      parts: [{ kind: 'text', text }],
+    }
+    this.publishStatus(eventBus, taskId, contextId, 'working', false, message, 'text-content')
+  }
+
+  private publishThought(
+    eventBus: ExecutionEventBus,
+    taskId: string,
+    contextId: string,
+    text: string
+  ) {
+    const message: Message = {
+      kind: 'message',
+      role: 'agent',
+      messageId: crypto.randomUUID(),
+      taskId,
+      contextId,
+      parts: [{ kind: 'data', data: { text } }],
+    }
+    this.publishStatus(eventBus, taskId, contextId, 'working', false, message, 'thought')
+  }
+
+  private publishToolUpdate(
+    eventBus: ExecutionEventBus,
+    taskId: string,
+    contextId: string,
+    data: Record<string, unknown>
+  ) {
+    const message: Message = {
+      kind: 'message',
+      role: 'agent',
+      messageId: crypto.randomUUID(),
+      taskId,
+      contextId,
+      parts: [{ kind: 'data', data }],
+    }
+    this.publishStatus(eventBus, taskId, contextId, 'working', false, message, 'tool-call-update')
+  }
+
+  private publishToolOutput(
+    eventBus: ExecutionEventBus,
+    taskId: string,
+    contextId: string,
+    callId: string,
+    output: string,
+    append: boolean,
+    lastChunk: boolean
+  ) {
+    eventBus.publish({
+      kind: 'artifact-update',
+      taskId,
+      contextId,
+      artifact: {
+        artifactId: `tool-${callId}-output`,
+        parts: [{ kind: 'text', text: output }],
+      },
+      append,
+      lastChunk,
+    })
+  }
+
+  private publishFailure(
+    eventBus: ExecutionEventBus,
+    taskId: string,
+    contextId: string,
+    errorMessage: string
+  ) {
+    const message: Message = {
+      kind: 'message',
+      role: 'agent',
+      messageId: crypto.randomUUID(),
+      taskId,
+      contextId,
+      parts: [{ kind: 'text', text: `Error: ${errorMessage}` }],
+    }
+    this.publishStatus(eventBus, taskId, contextId, 'failed', true, message, 'state-change')
+    eventBus.finished()
+  }
+
+  private publishCanceled(eventBus: ExecutionEventBus, taskId: string, contextId?: string) {
+    const message: Message = {
+      kind: 'message',
+      role: 'agent',
+      messageId: crypto.randomUUID(),
+      taskId,
+      contextId: contextId ?? crypto.randomUUID(),
+      parts: [{ kind: 'text', text: 'Task canceled.' }],
+    }
+    this.publishStatus(eventBus, taskId, message.contextId!, 'canceled', true, message, 'state-change')
+    this.canceledTasks.delete(taskId)
+    this.taskContexts.delete(taskId)
+  }
+}
+
 /**
  * CodexAdapter - A2A adapter for OpenAI Codex
- *
- * Creates a local A2A-compatible HTTP server that wraps the Codex SDK.
- * This allows Codex to be used through the same A2A interface as other agents.
  */
 export class CodexAdapter extends EventEmitter implements AgentAdapter {
   readonly id = 'codex'
@@ -24,11 +385,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
   private serverUrl: string | null = null
   private connected = false
   private codex: Codex | null = null
-  private threads: Map<string, Thread> = new Map() // contextId -> Thread
+  private requestHandler: DefaultRequestHandler | null = null
 
   async connect(): Promise<void> {
     if (this.connected && this.serverUrl) return
-
     await this.startServer()
   }
 
@@ -40,7 +400,7 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     this.connected = false
     this.serverUrl = null
     this.codex = null
-    this.threads.clear()
+    this.requestHandler = null
     this.emit('status', { status: 'disconnected' })
   }
 
@@ -52,7 +412,6 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
     return this.serverUrl
   }
 
-  // Message sending is handled via HTTP server
   async *sendMessage(
     _message: A2AMessage,
     _contextId?: string
@@ -62,46 +421,100 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
       error: {
         code: 'USE_RENDERER',
         message:
-          'Message sending should be done via HTTP. Use getServerUrl() to get the server URL.',
+          'Message sending should be done via A2A HTTP. Use getServerUrl() to get the server URL.',
       },
     }
   }
 
-  async cancelTask(_taskId: string): Promise<void> {
-    // TODO: Implement task cancellation
+  async cancelTask(taskId: string): Promise<void> {
+    if (!this.requestHandler) return
+    await this.requestHandler.cancelTask({ id: taskId })
   }
 
   private async startServer(): Promise<void> {
     this.emit('status', { status: 'connecting' })
 
     try {
-      // Dynamically import Codex SDK
       const { Codex } = await import('@openai/codex-sdk')
       this.codex = new Codex({
         env: {
           ...process.env,
-          // Ensure PATH is available for Codex CLI
           PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
         },
       })
 
-      // Find available port
       const port = await this.findAvailablePort(DEFAULT_PORT)
+      const app = express()
 
-      // Create HTTP server
-      this.server = http.createServer((req, res) => {
-        this.handleRequest(req, res)
+      app.use((req, res, next) => {
+        res.setHeader('Access-Control-Allow-Origin', '*')
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept')
+        if (req.method === 'OPTIONS') {
+          res.status(204).end()
+          return
+        }
+        next()
       })
+
+      const agentCard: AgentCard = {
+        name: 'Codex',
+        description: "OpenAI's coding agent powered by Codex SDK",
+        protocolVersion: '0.3.0',
+        version: '0.1.0',
+        url: `http://localhost:${port}/a2a/jsonrpc`,
+        provider: {
+          organization: 'OpenAI',
+          url: 'https://openai.com',
+        },
+        capabilities: {
+          streaming: true,
+          pushNotifications: false,
+          stateTransitionHistory: true,
+        },
+        defaultInputModes: ['text'],
+        defaultOutputModes: ['text'],
+        additionalInterfaces: [
+          { url: `http://localhost:${port}/a2a/jsonrpc`, transport: 'JSONRPC' },
+          { url: `http://localhost:${port}/a2a/rest`, transport: 'HTTP+JSON' },
+        ],
+        skills: [
+          {
+            id: 'code_generation',
+            name: 'Code Generation',
+            description: 'Generate, modify, and explain code',
+            tags: ['code', 'development', 'programming'],
+          },
+        ],
+      }
+
+      const executor = new CodexExecutor(this.codex)
+      this.requestHandler = new DefaultRequestHandler(agentCard, new InMemoryTaskStore(), executor)
+
+      app.use(`/${AGENT_CARD_PATH}`, agentCardHandler({ agentCardProvider: this.requestHandler }))
+      app.use(
+        '/a2a/jsonrpc',
+        jsonRpcHandler({
+          requestHandler: this.requestHandler,
+          userBuilder: UserBuilder.noAuthentication,
+        })
+      )
+      app.use(
+        '/a2a/rest',
+        restHandler({
+          requestHandler: this.requestHandler,
+          userBuilder: UserBuilder.noAuthentication,
+        })
+      )
+
+      this.server = http.createServer(app)
 
       return new Promise((resolve, reject) => {
         this.server!.listen(port, () => {
           this.serverUrl = `http://localhost:${port}`
           this.connected = true
           console.log('[Codex A2A] Server started on', this.serverUrl)
-          this.emit('status', {
-            status: 'connected',
-            serverUrl: this.serverUrl,
-          })
+          this.emit('status', { status: 'connected', serverUrl: this.serverUrl })
           resolve()
         })
 
@@ -132,444 +545,5 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
         resolve(this.findAvailablePort(startPort + 1))
       })
     })
-  }
-
-  private handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-    // Handle CORS
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept')
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204)
-      res.end()
-      return
-    }
-
-    // Handle agent card
-    if (req.url === '/.well-known/agent-card.json' && req.method === 'GET') {
-      this.handleAgentCard(res)
-      return
-    }
-
-    // Handle A2A JSON-RPC
-    if (req.method === 'POST') {
-      this.handleJsonRpc(req, res)
-      return
-    }
-
-    res.writeHead(404)
-    res.end('Not Found')
-  }
-
-  private handleAgentCard(res: http.ServerResponse): void {
-    const card = {
-      name: 'Codex',
-      description: "OpenAI's coding agent powered by Codex SDK",
-      url: this.serverUrl,
-      provider: {
-        organization: 'OpenAI',
-        url: 'https://openai.com',
-      },
-      protocolVersion: '0.3.0',
-      version: '0.1.0',
-      capabilities: this.capabilities,
-      defaultInputModes: ['text'],
-      defaultOutputModes: ['text'],
-      skills: [
-        {
-          id: 'code_generation',
-          name: 'Code Generation',
-          description: 'Generate, modify, and explain code',
-          tags: ['code', 'development', 'programming'],
-        },
-      ],
-    }
-
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify(card))
-  }
-
-  private async handleJsonRpc(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    let body = ''
-    for await (const chunk of req) {
-      body += chunk
-    }
-
-    try {
-      const request = JSON.parse(body)
-      console.log('[Codex A2A] Request:', JSON.stringify(request, null, 2))
-
-      if (request.method === 'message/stream') {
-        await this.handleMessageStream(request, res)
-      } else {
-        res.writeHead(400, { 'Content-Type': 'application/json' })
-        res.end(
-          JSON.stringify({
-            error: { code: -32601, message: 'Method not found' },
-          })
-        )
-      }
-    } catch (error) {
-      console.error('[Codex A2A] Error:', error)
-      res.writeHead(500, { 'Content-Type': 'application/json' })
-      res.end(
-        JSON.stringify({
-          error: {
-            code: -32603,
-            message: error instanceof Error ? error.message : 'Internal error',
-          },
-        })
-      )
-    }
-  }
-
-  private async handleMessageStream(
-    request: { id: string; params: { contextId: string; message: A2AMessage } },
-    res: http.ServerResponse
-  ): Promise<void> {
-    const { id: requestId, params } = request
-    const { contextId, message } = params
-
-    // Extract text from message parts
-    const text = message.parts
-      .filter((p): p is { kind: 'text'; text: string } => p.kind === 'text')
-      .map((p) => p.text)
-      .join('\n')
-
-    if (!text) {
-      res.writeHead(400, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: { code: -32602, message: 'No text content' } }))
-      return
-    }
-
-    // Set up SSE response
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    })
-
-    const taskId = crypto.randomUUID()
-
-    // Send initial task event
-    this.sendSSE(res, requestId, {
-      kind: 'task',
-      id: taskId,
-      contextId,
-      status: { state: 'submitted', timestamp: new Date().toISOString() },
-    })
-
-    try {
-      // Get or create thread for this context
-      let thread = this.threads.get(contextId)
-      if (!thread) {
-        thread = this.codex!.startThread({
-          skipGitRepoCheck: true, // Allow running outside git repos
-          webSearchEnabled: true,
-          networkAccessEnabled: true,
-          webSearchMode: 'live',
-        })
-        this.threads.set(contextId, thread)
-      }
-
-      // Send working status
-      this.sendSSE(res, requestId, {
-        kind: 'status-update',
-        taskId,
-        contextId,
-        status: { state: 'working', timestamp: new Date().toISOString() },
-        final: false,
-      })
-
-      // Run Codex with streaming
-      const { events } = await thread.runStreamed(text)
-
-      // Track sent content for each item to calculate delta
-      const sentTextLengths = new Map<string, number>()
-      const sentItemStates = new Map<string, string>() // Track last sent state for non-text items
-
-      for await (const event of events) {
-        console.log('[Codex A2A] Event:', event.type, JSON.stringify(event, null, 2))
-
-        // Handle item events
-        if (event.type === 'item.updated' || event.type === 'item.completed') {
-          const item = event.item
-          const isCompleted = event.type === 'item.completed'
-
-          switch (item.type) {
-            // Text-based items with streaming support
-            case 'agent_message':
-            case 'reasoning': {
-              const textItem = item
-              if (textItem.text) {
-                const prevLength = sentTextLengths.get(textItem.id) || 0
-                const deltaText = textItem.text.slice(prevLength)
-
-                if (deltaText.length > 0) {
-                  sentTextLengths.set(textItem.id, textItem.text.length)
-                  this.sendItemMessage(res, requestId, taskId, contextId, {
-                    text: deltaText,
-                    itemType: textItem.type,
-                  })
-                }
-              }
-              break
-            }
-
-            // Command execution - show command and output
-            case 'command_execution': {
-              const cmdItem = item
-              const stateKey = `${cmdItem.id}:state`
-              const outputKey = `${cmdItem.id}:output`
-              const lastState = sentItemStates.get(stateKey)
-
-              // Send command start notification (only once)
-              // Content is empty - command is in metadata, rendered by frontend
-              if (!lastState) {
-                sentItemStates.set(stateKey, 'started')
-                this.sendItemMessage(res, requestId, taskId, contextId, {
-                  text: '', // Empty - just to create the block
-                  itemType: 'command_execution',
-                  metadata: {
-                    command: cmdItem.command,
-                    status: cmdItem.status,
-                  },
-                })
-              }
-
-              // Stream output incrementally
-              if (cmdItem.aggregated_output) {
-                const prevLength = sentTextLengths.get(outputKey) || 0
-                const deltaOutput = cmdItem.aggregated_output.slice(prevLength)
-
-                if (deltaOutput.length > 0) {
-                  sentTextLengths.set(outputKey, cmdItem.aggregated_output.length)
-                  this.sendItemMessage(res, requestId, taskId, contextId, {
-                    text: deltaOutput,
-                    itemType: 'command_output',
-                    metadata: { command: cmdItem.command },
-                  })
-                }
-              }
-
-              // Send completion status (metadata only, no extra text)
-              if (isCompleted && lastState !== 'completed') {
-                sentItemStates.set(stateKey, 'completed')
-                this.sendItemMessage(res, requestId, taskId, contextId, {
-                  text: '', // Empty - status is in metadata
-                  itemType: 'command_status',
-                  metadata: {
-                    command: cmdItem.command,
-                    status: cmdItem.status,
-                    exitCode: cmdItem.exit_code,
-                  },
-                })
-              }
-              break
-            }
-
-            // File changes - show file operations
-            case 'file_change': {
-              const fileItem = item
-              if (isCompleted) {
-                const changeLines = fileItem.changes
-                  .map((c) => {
-                    const icon = c.kind === 'add' ? '+' : c.kind === 'delete' ? '-' : '~'
-                    return `  ${icon} ${c.path}`
-                  })
-                  .join('\n')
-                const statusIcon = fileItem.status === 'completed' ? '✓' : '✗'
-                this.sendItemMessage(res, requestId, taskId, contextId, {
-                  text: `\n**File Changes** [${statusIcon}]\n${changeLines}\n`,
-                  itemType: 'file_change',
-                  metadata: {
-                    changes: fileItem.changes,
-                    status: fileItem.status,
-                  },
-                })
-              }
-              break
-            }
-
-            // MCP tool calls
-            case 'mcp_tool_call': {
-              const mcpItem = item
-              const stateKey = `${mcpItem.id}:state`
-              const lastState = sentItemStates.get(stateKey)
-
-              // Send tool call start
-              if (!lastState) {
-                sentItemStates.set(stateKey, 'started')
-                this.sendItemMessage(res, requestId, taskId, contextId, {
-                  text: `\n**MCP Tool Call**: ${mcpItem.server}/${mcpItem.tool}\n`,
-                  itemType: 'mcp_tool_call',
-                  metadata: {
-                    server: mcpItem.server,
-                    tool: mcpItem.tool,
-                    arguments: mcpItem.arguments,
-                    status: mcpItem.status,
-                  },
-                })
-              }
-
-              // Send completion with result or error
-              if (isCompleted && lastState !== 'completed') {
-                sentItemStates.set(stateKey, 'completed')
-                if (mcpItem.error) {
-                  this.sendItemMessage(res, requestId, taskId, contextId, {
-                    text: `[✗ MCP Error: ${mcpItem.error.message}]\n`,
-                    itemType: 'mcp_tool_error',
-                    metadata: { error: mcpItem.error },
-                  })
-                } else if (mcpItem.result) {
-                  this.sendItemMessage(res, requestId, taskId, contextId, {
-                    text: `[✓ MCP Tool completed]\n`,
-                    itemType: 'mcp_tool_result',
-                    metadata: { result: mcpItem.result },
-                  })
-                }
-              }
-              break
-            }
-
-            // Web search
-            case 'web_search': {
-              const searchItem = item
-              this.sendItemMessage(res, requestId, taskId, contextId, {
-                text: `\n**Web Search**: "${searchItem.query}"\n`,
-                itemType: 'web_search',
-                metadata: { query: searchItem.query },
-              })
-              break
-            }
-
-            // Todo list
-            case 'todo_list': {
-              const todoItem = item
-              const todoLines = todoItem.items
-                .map((t) => `  ${t.completed ? '☑' : '☐'} ${t.text}`)
-                .join('\n')
-              this.sendItemMessage(res, requestId, taskId, contextId, {
-                text: `\n**Todo List**:\n${todoLines}\n`,
-                itemType: 'todo_list',
-                metadata: { items: todoItem.items },
-              })
-              break
-            }
-
-            // Error
-            case 'error': {
-              const errorItem = item
-              this.sendItemMessage(res, requestId, taskId, contextId, {
-                text: `\n**Error**: ${errorItem.message}\n`,
-                itemType: 'error',
-                metadata: { message: errorItem.message },
-              })
-              break
-            }
-
-            default: {
-              // Handle legacy message format with content array
-              if ('content' in item && Array.isArray(item.content)) {
-                for (const content of item.content) {
-                  if (content.type === 'output_text' && content.text) {
-                    const contentKey = `${item.id}:${content.type}`
-                    const prevLength = sentTextLengths.get(contentKey) || 0
-                    const deltaText = content.text.slice(prevLength)
-
-                    if (deltaText.length > 0) {
-                      sentTextLengths.set(contentKey, content.text.length)
-                      this.sendItemMessage(res, requestId, taskId, contextId, {
-                        text: deltaText,
-                        itemType: 'agent_message',
-                      })
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // Send completion
-      this.sendSSE(res, requestId, {
-        kind: 'status-update',
-        taskId,
-        contextId,
-        status: { state: 'completed', timestamp: new Date().toISOString() },
-        final: true,
-      })
-    } catch (error) {
-      console.error('[Codex A2A] Stream error:', error)
-      this.sendSSE(res, requestId, {
-        kind: 'status-update',
-        taskId,
-        contextId,
-        status: {
-          state: 'failed',
-          message: {
-            kind: 'message',
-            role: 'agent',
-            parts: [
-              {
-                kind: 'text',
-                text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-              },
-            ],
-            messageId: crypto.randomUUID(),
-            taskId,
-            contextId,
-          },
-          timestamp: new Date().toISOString(),
-        },
-        final: true,
-      })
-    }
-
-    res.end()
-  }
-
-  private sendItemMessage(
-    res: http.ServerResponse,
-    requestId: string,
-    taskId: string,
-    contextId: string,
-    options: {
-      text: string
-      itemType: string
-      metadata?: Record<string, unknown>
-    }
-  ): void {
-    this.sendSSE(res, requestId, {
-      kind: 'status-update',
-      taskId,
-      contextId,
-      status: {
-        state: 'working',
-        message: {
-          kind: 'message',
-          role: 'agent',
-          parts: [{ kind: 'text', text: options.text }],
-          messageId: crypto.randomUUID(),
-          taskId,
-          contextId,
-          metadata: { itemType: options.itemType, ...options.metadata },
-        },
-        timestamp: new Date().toISOString(),
-      },
-      final: false,
-    })
-  }
-
-  private sendSSE(res: http.ServerResponse, requestId: string, result: unknown): void {
-    const event = {
-      jsonrpc: '2.0',
-      id: requestId,
-      result,
-    }
-    res.write(`data: ${JSON.stringify(event)}\n\n`)
   }
 }
