@@ -1,28 +1,24 @@
-import { useEffect, useState } from "react";
-import { MessageBlockView } from "@/components/chat/message-block";
-import { Button } from "@/components/ui/button";
+import { useEffect, useState } from 'react'
+import { MessageBlockView } from '@/components/chat/message-block'
+import { Button } from '@/components/ui/button'
 import {
   ChatContainerContent,
   ChatContainerRoot,
   ChatContainerScrollAnchor,
-} from "@/components/ui/chat-container";
-import { Message, MessageContent } from "@/components/ui/message";
-import {
-  PromptInput,
-  PromptInputActions,
-  PromptInputTextarea,
-} from "@/components/ui/prompt-input";
-import { type ChatMessage, type MessageBlock, useChat } from "@/hooks/useChat";
-import { cn } from "@/lib/utils";
+} from '@/components/ui/chat-container'
+import { Message, MessageContent } from '@/components/ui/message'
+import { PromptInput, PromptInputActions, PromptInputTextarea } from '@/components/ui/prompt-input'
+import { type ChatMessage, type MessageBlock, useChat } from '@/hooks/useChat'
+import { cn } from '@/lib/utils'
 
 export type AgentChatProps = {
-  agentId: string;
-  name: string;
-  icon: React.ComponentType<{ size?: number }>;
-};
+  agentId: string
+  name: string
+  icon: React.ComponentType<{ size?: number }>
+}
 
 function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState('')
   const {
     messages,
     isLoading,
@@ -31,17 +27,17 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
     connectionError,
     sendMessage,
     tryAutoConnect,
-  } = useChat(agentId);
+  } = useChat(agentId)
 
   useEffect(() => {
-    tryAutoConnect();
-  }, [tryAutoConnect]);
+    tryAutoConnect()
+  }, [tryAutoConnect])
 
   const handleSubmit = () => {
-    if (!input.trim() || isLoading || !isConnected) return;
-    sendMessage(input);
-    setInput("");
-  };
+    if (!input.trim() || isLoading || !isConnected) return
+    sendMessage(input)
+    setInput('')
+  }
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -57,18 +53,14 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {isConnecting && (
-            <span className="text-xs text-muted-foreground">Connecting...</span>
-          )}
+          {isConnecting && <span className="text-xs text-muted-foreground">Connecting...</span>}
           {isConnected && (
             <span className="flex items-center gap-1 text-xs text-green-600">
               <span className="size-2 rounded-full bg-green-500" />
               Connected
             </span>
           )}
-          {connectionError && (
-            <span className="text-xs text-red-500">{connectionError}</span>
-          )}
+          {connectionError && <span className="text-xs text-red-500">{connectionError}</span>}
         </div>
       </div>
 
@@ -89,7 +81,7 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
             </div>
           ) : (
             messages.map((msg: ChatMessage) => {
-              const isUser = msg.role === "user";
+              const isUser = msg.role === 'user'
               const assistantBlocks =
                 msg.blocks.length > 0
                   ? msg.blocks
@@ -97,22 +89,19 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
                     ? [
                         {
                           id: msg.id,
-                          type: "text",
+                          type: 'text',
                           content: msg.content,
                           isStreaming: msg.isStreaming,
                         } as MessageBlock,
                       ]
-                    : [];
+                    : []
 
               return (
-                <Message
-                  key={msg.id}
-                  className={cn("items-start", isUser && "flex-row-reverse")}
-                >
+                <Message key={msg.id} className={cn('items-start', isUser && 'flex-row-reverse')}>
                   <div
                     className={cn(
-                      "flex w-full flex-col gap-2",
-                      isUser ? "items-end" : "items-start",
+                      'flex w-full flex-col gap-2',
+                      isUser ? 'items-end' : 'items-start'
                     )}
                   >
                     {!isUser && <Icon size={16} />}
@@ -122,7 +111,7 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
                       </MessageContent>
                     ) : assistantBlocks.length === 0 ? (
                       <MessageContent className="text-muted-foreground">
-                        {msg.isStreaming ? "..." : ""}
+                        {msg.isStreaming ? '...' : ''}
                       </MessageContent>
                     ) : (
                       assistantBlocks.map((block) => (
@@ -131,7 +120,7 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
                     )}
                   </div>
                 </Message>
-              );
+              )
             })
           )}
           <ChatContainerScrollAnchor />
@@ -149,11 +138,7 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
         >
           <div className="flex items-end gap-2">
             <PromptInputTextarea
-              placeholder={
-                isConnected
-                  ? `Ask ${name} anything...`
-                  : `Connecting to ${name}...`
-              }
+              placeholder={isConnected ? `Ask ${name} anything...` : `Connecting to ${name}...`}
             />
             <PromptInputActions>
               <Button
@@ -168,7 +153,7 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
         </PromptInput>
       </div>
     </div>
-  );
+  )
 }
 
-export { AgentChat };
+export { AgentChat }

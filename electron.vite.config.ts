@@ -22,6 +22,7 @@ export default defineConfig({
     build: {
       watch: {},
       rollupOptions: {
+        external: ['@google/gemini-cli-a2a-server', '@google/gemini-cli-core', 'web-tree-sitter'],
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
         },

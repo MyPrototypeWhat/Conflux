@@ -7,6 +7,10 @@ A unified AI Agent desktop client that brings Claude Code, Codex, Gemini CLI and
 - **Multi-Agent Tab Management** - Run multiple AI Agents simultaneously in one window, switch between them like browser tabs
 - **Unified Experience** - Consistent interface and interactions across all Agents
 - **Quick Agent Switching** - Launch different AI Agents with one click from the New Tab page
+- **A2A Protocol Streaming** - Connect over A2A with status updates and artifact streams
+- **Structured Tool Rendering** - Shell commands, file edits, web searches, and todo lists render as tool cards
+- **Artifact Attachments** - Streamed tool output and artifacts are shown as attachments
+- **Reasoning View** - Collapsible reasoning blocks for agent thought streams
 
 ## Getting Started
 
@@ -45,7 +49,7 @@ pnpm build:dist
 - [ ] Unified task status tracking and result aggregation
 
 ### Agent Adapters
-- [ ] Claude Code full integration
-- [ ] Codex full integration
-- [ ] Gemini CLI full integration
+- [x] Claude Code full integration
+- [x] Codex full integration
+- [x] Gemini CLI full integration
 - [ ] Custom Agent onboarding support

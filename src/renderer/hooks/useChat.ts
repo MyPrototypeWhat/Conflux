@@ -1,202 +1,18 @@
+import type { Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent } from '@a2a-js/sdk'
+import { ClientFactory } from '@a2a-js/sdk/client'
 import { useCallback, useRef, useState } from 'react'
+import { resolveAdapterForUrl, type A2AAdapterKind } from '@/lib/a2a-adapter'
+import type { ChatMessage, MessageBlock } from '@/lib/a2a/blocks'
+import { createA2AEventNormalizer } from '@/lib/a2a/normalizers'
+import type { NormalizedBlock } from '@/lib/a2a/normalizers/types'
 
-export type MessageBlockType =
-  | 'text'
-  | 'reasoning'
-  | 'tool_call'
-  | 'file_change'
-  | 'command_execution'
-  | 'web_search'
-  | 'todo_list'
-  | 'error'
-
-export interface MessageBlock {
-  id: string
-  type: MessageBlockType
-  content: string
-  isStreaming?: boolean
-  // Additional metadata for specific block types
-  metadata?: {
-    command?: string
-    exitCode?: number
-    status?: string
-    query?: string
-    items?: Array<{ text: string; completed: boolean }>
-    changes?: Array<{ path: string; kind: string }>
-  }
-}
-
-export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string // For user messages, or legacy compatibility
-  blocks: MessageBlock[] // For assistant messages with multiple blocks
-  timestamp: number
-  isStreaming?: boolean
-}
+export type { ChatMessage, MessageBlock, MessageBlockType } from '@/lib/a2a/blocks'
 
 interface UseChatOptions {
   onError?: (error: string) => void
 }
 
-/**
- * A2A Client - handles communication with A2A server in renderer process
- * This allows DevTools to capture network requests for debugging
- */
-class A2AClient {
-  private serverUrl: string
-
-  constructor(serverUrl: string) {
-    this.serverUrl = serverUrl
-  }
-
-  async *sendMessage(
-    content: string,
-    contextId: string
-  ): AsyncGenerator<{
-    type: string
-    text?: string
-    error?: string
-    itemType?: string
-    metadata?: Record<string, unknown>
-  }> {
-    const requestBody = {
-      jsonrpc: '2.0',
-      method: 'message/stream',
-      id: crypto.randomUUID(),
-      params: {
-        contextId,
-        message: {
-          messageId: crypto.randomUUID(),
-          role: 'user',
-          parts: [{ kind: 'text', text: content }],
-        },
-      },
-    }
-
-    console.log('[A2A Client] Request URL:', this.serverUrl)
-    console.log('[A2A Client] Request Body:', JSON.stringify(requestBody, null, 2))
-
-    const response = await fetch(this.serverUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify(requestBody),
-    })
-
-    console.log('[A2A Client] Response Status:', response.status, response.statusText)
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      console.log('[A2A Client] Error Response:', errorText)
-      yield { type: 'error', error: `HTTP ${response.status}: ${response.statusText}` }
-      return
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) {
-      yield { type: 'error', error: 'No response body' }
-      return
-    }
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-
-      // Parse SSE events
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6).trim()
-          if (data === '[DONE]') {
-            yield { type: 'done' }
-            return
-          }
-
-          try {
-            const event = JSON.parse(data)
-            console.log('[A2A Client] SSE Event:', event)
-
-            // Parse A2A event format
-            if (event.result) {
-              const result = event.result
-
-              // Handle different result kinds
-              if (result.kind === 'task') {
-                // Initial task creation - no text to show yet
-                console.log('[A2A Client] Task created:', result.id)
-              } else if (result.kind === 'status-update') {
-                // Status update - may contain message with text
-                const status = result.status
-                const message = status?.message
-
-                // Check for message in status
-                if (message?.parts) {
-                  const itemType = message.metadata?.itemType as string | undefined
-                  const metadata = message.metadata as Record<string, unknown> | undefined
-                  for (const part of message.parts) {
-                    if (part.kind === 'text' && part.text) {
-                      yield { type: 'text_delta', text: part.text, itemType, metadata }
-                    }
-                  }
-                }
-
-                // Check if task is complete or failed
-                if (
-                  status?.state === 'completed' ||
-                  status?.state === 'failed' ||
-                  status?.state === 'input-required'
-                ) {
-                  if (result.final) {
-                    yield { type: 'done' }
-                    return
-                  }
-                }
-
-                // Check for error in metadata
-                if (result.metadata?.error) {
-                  yield { type: 'error', error: result.metadata.error }
-                }
-              }
-
-              // Legacy format support: direct text content
-              if (result.text) {
-                yield { type: 'text_delta', text: result.text }
-              }
-
-              // Legacy format support: direct message parts
-              if (result.message?.parts && result.kind !== 'status-update') {
-                for (const part of result.message.parts) {
-                  if (part.kind === 'text' && part.text) {
-                    yield { type: 'text_delta', text: part.text }
-                  }
-                }
-              }
-            }
-
-            // Handle error
-            if (event.error) {
-              yield { type: 'error', error: event.error.message || 'Unknown error' }
-            }
-          } catch {
-            // Ignore parse errors
-          }
-        }
-      }
-    }
-
-    yield { type: 'done' }
-  }
-}
+const clientFactory = new ClientFactory()
 
 export function useChat(agentId: string, options: UseChatOptions = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -206,6 +22,7 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const [serverUrl, setServerUrl] = useState<string | null>(null)
   const hasTriedConnect = useRef(false)
+  const adapterRef = useRef<A2AAdapterKind>('unknown')
 
   const connect = useCallback(async () => {
     if (isConnecting || isConnected) return
@@ -235,6 +52,9 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
       setServerUrl(url)
       setIsConnected(true)
       console.log('[useChat] Connected to server:', url)
+
+      const resolved = await resolveAdapterForUrl(url)
+      adapterRef.current = resolved.adapter
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Connection failed'
       setConnectionError(error)
@@ -284,154 +104,165 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
       setIsLoading(true)
 
       try {
-        // Get context ID from main process
         const contextId = (await window.agentAPI.a2a.getContextId()) || crypto.randomUUID()
+        const client = await clientFactory.createFromUrl(serverUrl)
+        const adapterKind = adapterRef.current
+        const normalizer = createA2AEventNormalizer(adapterKind)
 
-        // Use A2A client in renderer for debugging
-        const client = new A2AClient(serverUrl)
+        const stream = client.sendMessageStream({
+          message: {
+            kind: 'message',
+            messageId: crypto.randomUUID(),
+            role: 'user',
+            contextId,
+            parts: [{ kind: 'text', text: content }],
+          },
+        })
 
-        for await (const event of client.sendMessage(content, contextId)) {
-          if (event.type === 'text_delta' && event.text) {
-            const itemType = event.itemType as string | undefined
-            const metadata = event.metadata as Record<string, unknown> | undefined
+        const applyNormalizedBlock = (normalized: NormalizedBlock) => {
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id !== assistantMessageId) return msg
 
-            // Determine block type and handling strategy
-            let blockType: MessageBlockType = 'text'
-            let appendToCommand = false
+              const blocks = [...msg.blocks]
+              const lastBlockIndex = blocks.length - 1
+              const lastBlock = blocks[lastBlockIndex]
 
-            // Map itemType to block type
-            switch (itemType) {
-              case 'reasoning':
-                blockType = 'reasoning'
-                break
-              case 'tool_call':
-              case 'mcp_tool_call':
-              case 'mcp_tool_result':
-              case 'mcp_tool_error':
-                blockType = 'tool_call'
-                break
-              case 'file_change':
-                blockType = 'file_change'
-                break
-              case 'command_execution':
-                blockType = 'command_execution'
-                break
-              case 'command_output':
-              case 'command_status':
-                // These should append to the last command_execution block
-                blockType = 'command_execution'
-                appendToCommand = true
-                break
-              case 'web_search':
-                blockType = 'web_search'
-                break
-              case 'todo_list':
-                blockType = 'todo_list'
-                break
-              case 'error':
-                blockType = 'error'
-                break
-              case 'agent_message':
-              default:
-                blockType = 'text'
-            }
+              if (normalized.blockType === 'artifact') {
+                const artifactId = normalized.artifact.artifactId
+                const existingIndex = blocks
+                  .map((block, index) => ({ block, index }))
+                  .reverse()
+                  .find(
+                    (entry) =>
+                      entry.block.type === 'artifact' &&
+                      entry.block.metadata?.artifact?.artifactId === artifactId
+                  )?.index
 
-            // Update message with new block content
-            setMessages((prev) =>
-              prev.map((msg) => {
-                if (msg.id !== assistantMessageId) return msg
+                if (normalized.append && existingIndex !== undefined) {
+                  const existingBlock = blocks[existingIndex]
+                  const existingArtifact = existingBlock.metadata?.artifact
+                  const mergedParts = existingArtifact
+                    ? [...existingArtifact.parts, ...normalized.artifact.parts]
+                    : normalized.artifact.parts
 
-                const blocks = [...msg.blocks]
-                const lastBlockIndex = blocks.length - 1
-                const lastBlock = blocks[lastBlockIndex]
-
-                // Special handling for command output/status - always append to last command block
-                if (appendToCommand && lastBlock?.type === 'command_execution') {
-                  const updatedMetadata = { ...lastBlock.metadata }
-
-                  // Update status and exitCode from command_status
-                  if (itemType === 'command_status' && metadata) {
-                    if (metadata.status) updatedMetadata.status = metadata.status as string
-                    if (metadata.exitCode !== undefined)
-                      updatedMetadata.exitCode = metadata.exitCode as number
-                  }
-
-                  blocks[lastBlockIndex] = {
-                    ...lastBlock,
-                    content: lastBlock.content + event.text,
-                    metadata: updatedMetadata,
+                  blocks[existingIndex] = {
+                    ...existingBlock,
+                    metadata: {
+                      ...existingBlock.metadata,
+                      artifact: {
+                        artifactId,
+                        name: normalized.artifact.name,
+                        parts: mergedParts,
+                      },
+                    },
                   }
                   return { ...msg, blocks }
                 }
 
-                // Normal handling - append to same type or create new block
-                if (lastBlock && lastBlock.type === blockType && lastBlock.isStreaming) {
-                  // Append to existing block
-                  blocks[lastBlockIndex] = {
-                    ...lastBlock,
-                    content: lastBlock.content + event.text,
-                  }
-                } else {
-                  // Mark previous block as done (if exists) and create new block
-                  if (lastBlock?.isStreaming) {
-                    blocks[lastBlockIndex] = { ...lastBlock, isStreaming: false }
-                  }
-
-                  // Build metadata for new block
-                  const blockMetadata: MessageBlock['metadata'] = {}
-                  if (blockType === 'command_execution' && metadata?.command) {
-                    blockMetadata.command = metadata.command as string
-                    blockMetadata.status = metadata.status as string
-                  }
-                  if (blockType === 'web_search' && metadata?.query) {
-                    blockMetadata.query = metadata.query as string
-                  }
-                  if (blockType === 'todo_list' && metadata?.items) {
-                    blockMetadata.items = metadata.items as Array<{
-                      text: string
-                      completed: boolean
-                    }>
-                  }
-                  if (blockType === 'file_change' && metadata?.changes) {
-                    blockMetadata.changes = metadata.changes as Array<{
-                      path: string
-                      kind: string
-                    }>
-                  }
-
-                  blocks.push({
-                    id: crypto.randomUUID(),
-                    type: blockType,
-                    content: event.text || '',
-                    isStreaming: true,
-                    metadata: Object.keys(blockMetadata).length > 0 ? blockMetadata : undefined,
-                  })
-                }
-
-                return { ...msg, blocks }
-              })
-            )
-          } else if (event.type === 'error') {
-            const error = event.error || 'Unknown error'
-            setMessages((prev) =>
-              prev.map((msg) => {
-                if (msg.id !== assistantMessageId) return msg
-                return {
-                  ...msg,
-                  blocks: [
-                    ...msg.blocks,
-                    {
-                      id: crypto.randomUUID(),
-                      type: 'text',
-                      content: `Error: ${error}`,
-                      isStreaming: false,
+                blocks.push({
+                  id: crypto.randomUUID(),
+                  type: 'artifact',
+                  content: '',
+                  isStreaming: false,
+                  metadata: {
+                    artifact: {
+                      artifactId,
+                      name: normalized.artifact.name,
+                      parts: normalized.artifact.parts,
                     },
-                  ],
+                  },
+                })
+                return { ...msg, blocks }
+              }
+
+              const deltaText = normalized.text ?? ''
+              const blockType = normalized.blockType
+              const metadata = normalized.metadata
+              const appendToCommand = normalized.appendToCommand
+
+              if (appendToCommand && lastBlock?.type === 'command_execution') {
+                const updatedMetadata = { ...lastBlock.metadata }
+
+                if (metadata?.status) updatedMetadata.status = metadata.status as string
+                if (metadata?.exitCode !== undefined)
+                  updatedMetadata.exitCode = metadata.exitCode as number
+
+                blocks[lastBlockIndex] = {
+                  ...lastBlock,
+                  content: lastBlock.content + deltaText,
+                  metadata: updatedMetadata,
                 }
-              })
-            )
-            options.onError?.(error)
-            break
+                return { ...msg, blocks }
+              }
+
+              const shouldCreateBlock =
+                deltaText.length > 0 ||
+                blockType === 'command_execution' ||
+                blockType === 'file_change' ||
+                blockType === 'todo_list' ||
+                blockType === 'tool_call' ||
+                blockType === 'error'
+
+              if (lastBlock && lastBlock.type === blockType && lastBlock.isStreaming) {
+                blocks[lastBlockIndex] = {
+                  ...lastBlock,
+                  content: lastBlock.content + deltaText,
+                }
+              } else if (shouldCreateBlock) {
+                if (lastBlock?.isStreaming) {
+                  blocks[lastBlockIndex] = { ...lastBlock, isStreaming: false }
+                }
+
+                const blockMetadata: MessageBlock['metadata'] = {}
+                if (blockType === 'command_execution') {
+                  const command =
+                    (metadata?.command as string | undefined) ||
+                    (metadata?.toolName as string | undefined)
+                  if (command) blockMetadata.command = command
+                  if (metadata?.status) blockMetadata.status = metadata.status as string
+                  if (metadata?.exitCode !== undefined)
+                    blockMetadata.exitCode = metadata.exitCode as number
+                }
+                if (blockType === 'web_search' && metadata?.query) {
+                  blockMetadata.query = metadata.query as string
+                }
+                if (blockType === 'todo_list' && metadata?.items) {
+                  blockMetadata.items = metadata.items as Array<{
+                    text: string
+                    completed: boolean
+                  }>
+                }
+                if (blockType === 'file_change' && metadata?.changes) {
+                  blockMetadata.changes = metadata.changes as Array<{ path: string; kind: string }>
+                }
+
+                blocks.push({
+                  id: crypto.randomUUID(),
+                  type: blockType,
+                  content: deltaText,
+                  isStreaming: true,
+                  metadata: Object.keys(blockMetadata).length > 0 ? blockMetadata : undefined,
+                })
+              }
+
+              return { ...msg, blocks }
+            })
+          )
+        }
+
+        for await (const event of stream) {
+          if (!event) continue
+
+          if (event.kind === 'status-update') {
+            const blocks = normalizer.handleStatusUpdate(event as TaskStatusUpdateEvent)
+            blocks.forEach(applyNormalizedBlock)
+          } else if (event.kind === 'artifact-update') {
+            const blocks = normalizer.handleArtifactUpdate(event as TaskArtifactUpdateEvent)
+            blocks.forEach(applyNormalizedBlock)
+          } else if (event.kind === 'message') {
+            const blocks = normalizer.handleMessage(event as Message)
+            blocks.forEach(applyNormalizedBlock)
           }
         }
 

@@ -1,6 +1,6 @@
-import type { ChildProcess } from 'node:child_process'
-import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import type { Server } from 'node:http'
+import { createApp, updateCoderAgentCardUrl } from '@google/gemini-cli-a2a-server'
 import type { A2AMessage, AgentAdapter, AgentCapabilities, AgentEvent } from '../../types/a2a'
 
 /**
@@ -21,7 +21,7 @@ export class GeminiAdapter extends EventEmitter implements AgentAdapter {
     stateTransitionHistory: true,
   }
 
-  private serverProcess: ChildProcess | null = null
+  private server: Server | null = null
   private connected = false
   private serverUrl: string | null = null
 
@@ -32,10 +32,14 @@ export class GeminiAdapter extends EventEmitter implements AgentAdapter {
   }
 
   async disconnect(): Promise<void> {
-    if (this.serverProcess) {
-      this.serverProcess.kill()
-      this.serverProcess = null
-    }
+    await new Promise<void>((resolve) => {
+      if (!this.server) {
+        resolve()
+        return
+      }
+      this.server.close(() => resolve())
+      this.server = null
+    })
     this.connected = false
     this.serverUrl = null
     this.emit('status', { status: 'disconnected' })
@@ -70,56 +74,50 @@ export class GeminiAdapter extends EventEmitter implements AgentAdapter {
   }
 
   private async startServer(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.emit('status', { status: 'connecting' })
+    this.emit('status', { status: 'connecting' })
 
-      // Start gemini-cli-a2a-server (it uses a random port)
-      this.serverProcess = spawn('npx', ['gemini-cli-a2a-server'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        shell: true,
-      })
+    try {
+      const app = await createApp()
+      const server = app.listen(0, 'localhost')
+      this.server = server
 
-      const timeout = setTimeout(() => {
-        reject(new Error('Server startup timeout'))
-      }, 30000)
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Server startup timeout'))
+        }, 30000)
 
-      this.serverProcess.stdout?.on('data', async (data) => {
-        const output = data.toString()
-        console.log('[Gemini A2A]', output)
-
-        // Parse server URL from output
-        // Example: "[CoreAgent] Agent Server started on http://localhost:57240"
-        const urlMatch = output.match(/Agent Server started on (http:\/\/[^\s]+)/)
-        if (urlMatch) {
-          this.serverUrl = urlMatch[1]
-          console.log('[Gemini A2A] Parsed server URL:', this.serverUrl)
+        server.on('listening', () => {
           clearTimeout(timeout)
+          const address = server.address()
+          if (!address || typeof address === 'string') {
+            reject(new Error('Failed to resolve server port'))
+            return
+          }
+
+          updateCoderAgentCardUrl(address.port)
+          this.serverUrl = `http://localhost:${address.port}`
           this.connected = true
+          console.log('[Gemini A2A] Server started on', this.serverUrl)
           this.emit('status', { status: 'connected', serverUrl: this.serverUrl })
           resolve()
-        }
-      })
+        })
 
-      this.serverProcess.stderr?.on('data', (data) => {
-        console.error('[Gemini A2A Error]', data.toString())
+        server.on('error', (err) => {
+          clearTimeout(timeout)
+          this.connected = false
+          this.serverUrl = null
+          this.emit('status', { status: 'error', error: err.message })
+          reject(err)
+        })
       })
-
-      this.serverProcess.on('error', (err) => {
-        clearTimeout(timeout)
-        this.connected = false
-        this.serverUrl = null
-        this.emit('status', { status: 'error', error: err.message })
-        reject(err)
+    } catch (error) {
+      this.connected = false
+      this.serverUrl = null
+      this.emit('status', {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Failed to start Gemini A2A server',
       })
-
-      this.serverProcess.on('exit', (code) => {
-        this.connected = false
-        this.serverProcess = null
-        this.serverUrl = null
-        if (code !== 0) {
-          this.emit('status', { status: 'disconnected' })
-        }
-      })
-    })
+      throw error
+    }
   }
 }
