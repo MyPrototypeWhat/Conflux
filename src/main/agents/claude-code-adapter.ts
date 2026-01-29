@@ -15,13 +15,58 @@ import {
   restHandler,
   UserBuilder,
 } from '@a2a-js/sdk/server/express'
+import {
+  type Query,
+  type SDKAssistantMessage,
+  type SDKAuthStatusMessage,
+  type SDKMessage,
+  type SDKPartialAssistantMessage,
+  type SDKResultMessage,
+  type SDKToolProgressMessage,
+  query,
+} from '@anthropic-ai/claude-agent-sdk'
 import express from 'express'
 import type { A2AMessage, AgentAdapter, AgentCapabilities, AgentEvent } from '../../types/a2a'
 
-type ClaudeAgentSDK = typeof import('@anthropic-ai/claude-agent-sdk')
-type Query = ReturnType<ClaudeAgentSDK['query']>
-
 const DEFAULT_PORT = 50003
+
+const isTextBlock = (block: unknown): block is { type: 'text'; text: string } => {
+  return (
+    typeof block === 'object' &&
+    block !== null &&
+    (block as { type?: string }).type === 'text' &&
+    typeof (block as { text?: unknown }).text === 'string'
+  )
+}
+
+const isToolUseBlock = (
+  block: unknown
+): block is { type: 'tool_use'; id?: string; name: string; input?: unknown } => {
+  return (
+    typeof block === 'object' &&
+    block !== null &&
+    (block as { type?: string }).type === 'tool_use' &&
+    typeof (block as { name?: unknown }).name === 'string'
+  )
+}
+
+const isThinkingBlock = (block: unknown): block is { type: 'thinking'; thinking: string } => {
+  return (
+    typeof block === 'object' &&
+    block !== null &&
+    (block as { type?: string }).type === 'thinking' &&
+    typeof (block as { thinking?: unknown }).thinking === 'string'
+  )
+}
+
+const getStreamEventDelta = (
+  event: SDKPartialAssistantMessage['event']
+): { type?: string; text?: string; thinking?: string } | null => {
+  if (typeof event !== 'object' || !event || !('delta' in event)) return null
+  const delta = (event as { delta?: unknown }).delta
+  if (typeof delta !== 'object' || !delta) return null
+  return delta as { type?: string; text?: string; thinking?: string }
+}
 
 class ClaudeCodeExecutor implements AgentExecutor {
   private sessions = new Map<string, { query: Query; abortController: AbortController }>()
@@ -65,7 +110,6 @@ class ClaudeCodeExecutor implements AgentExecutor {
       this.sessions.delete(contextId)
     }
 
-    const { query } = await import('@anthropic-ai/claude-agent-sdk')
     const abortController = new AbortController()
     const cwd = process.cwd()
 
@@ -90,37 +134,34 @@ class ClaudeCodeExecutor implements AgentExecutor {
 
     let currentTextContent = ''
     const toolUseIdByName = new Map<string, string>()
-    for await (const sdkMessage of queryInstance) {
+    // TODO: Emit tool-call-confirmation + input-required when Claude exposes approval-required tools.
+    for await (const sdkMessage of queryInstance as AsyncGenerator<SDKMessage, void>) {
       if (!sdkMessage) continue
 
       switch (sdkMessage.type) {
         case 'assistant': {
-          const assistantMsg = sdkMessage as {
-            type: 'assistant'
-            message: { content: Array<{ type: string; text?: string }> }
-          }
+          const assistantMsg = sdkMessage as SDKAssistantMessage
+          const contentBlocks = Array.isArray(assistantMsg.message.content)
+            ? assistantMsg.message.content
+            : []
 
-          for (const block of assistantMsg.message.content) {
-            if (block.type === 'text' && block.text) {
+          for (const block of contentBlocks) {
+            if (isTextBlock(block)) {
               const newText = block.text.slice(currentTextContent.length)
               if (newText) {
                 currentTextContent = block.text
                 this.publishTextContent(eventBus, taskId, contextId, newText)
               }
-            } else if (block.type === 'tool_use') {
-              const toolBlock = block as { type: 'tool_use'; name: string; input: unknown; id?: string }
-              const callId = toolBlock.id || crypto.randomUUID()
-              toolUseIdByName.set(toolBlock.name, callId)
+            } else if (isToolUseBlock(block)) {
+              const callId = block.id || crypto.randomUUID()
+              toolUseIdByName.set(block.name, callId)
               this.publishToolUpdate(eventBus, taskId, contextId, {
-                request: { callId, name: toolBlock.name },
+                request: { callId, name: block.name },
                 status: 'requested',
-                input: toolBlock.input,
+                input: block.input,
               })
-            } else if (block.type === 'thinking') {
-              const thinkingBlock = block as { type: 'thinking'; thinking: string }
-              if (thinkingBlock.thinking) {
-                this.publishThought(eventBus, taskId, contextId, thinkingBlock.thinking)
-              }
+            } else if (isThinkingBlock(block)) {
+              this.publishThought(eventBus, taskId, contextId, block.thinking)
             }
           }
 
@@ -129,43 +170,28 @@ class ClaudeCodeExecutor implements AgentExecutor {
         }
 
         case 'stream_event': {
-          const streamEvent = sdkMessage as {
-            type: 'stream_event'
-            event: { type: string; delta?: { type: string; text?: string } }
-          }
+          const streamEvent = sdkMessage as SDKPartialAssistantMessage
+          const eventType = (streamEvent.event as { type?: string }).type
+          const delta = getStreamEventDelta(streamEvent.event)
 
-          if (
-            streamEvent.event.type === 'content_block_delta' &&
-            streamEvent.event.delta?.type === 'text_delta' &&
-            streamEvent.event.delta.text
-          ) {
-            this.publishTextContent(eventBus, taskId, contextId, streamEvent.event.delta.text)
+          if (eventType === 'content_block_delta' && delta?.type === 'text_delta' && delta.text) {
+            this.publishTextContent(eventBus, taskId, contextId, delta.text)
           } else if (
-            streamEvent.event.type === 'content_block_delta' &&
-            streamEvent.event.delta?.type === 'thinking_delta' &&
-            (streamEvent.event.delta as { thinking?: string }).thinking
+            eventType === 'content_block_delta' &&
+            delta?.type === 'thinking_delta' &&
+            delta.thinking
           ) {
-            this.publishThought(
-              eventBus,
-              taskId,
-              contextId,
-              (streamEvent.event.delta as { thinking: string }).thinking
-            )
+            this.publishThought(eventBus, taskId, contextId, delta.thinking)
           }
           break
         }
 
         case 'result': {
-          const resultMsg = sdkMessage as {
-            type: 'result'
-            subtype: string
-            result?: string
-            errors?: string[]
-          }
+          const resultMsg = sdkMessage as SDKResultMessage
 
-          if (resultMsg.subtype === 'success' && resultMsg.result) {
+          if (resultMsg.subtype === 'success') {
             this.publishTextContent(eventBus, taskId, contextId, resultMsg.result)
-          } else if (resultMsg.subtype.startsWith('error') && resultMsg.errors?.length) {
+          } else if (resultMsg.subtype.startsWith('error') && resultMsg.errors.length) {
             this.publishFailure(eventBus, taskId, contextId, resultMsg.errors.join('\n'))
             return
           }
@@ -173,7 +199,7 @@ class ClaudeCodeExecutor implements AgentExecutor {
         }
 
         case 'auth_status': {
-          const authMsg = sdkMessage as { type: 'auth_status'; error?: string }
+          const authMsg = sdkMessage as SDKAuthStatusMessage
           if (authMsg.error) {
             this.publishFailure(
               eventBus,
@@ -187,14 +213,8 @@ class ClaudeCodeExecutor implements AgentExecutor {
         }
 
         case 'tool_progress': {
-          const progressMsg = sdkMessage as {
-            type: 'tool_progress'
-            tool_name: string
-            elapsed_time_seconds: number
-            tool_use_id?: string
-          }
-          const callId =
-            progressMsg.tool_use_id || toolUseIdByName.get(progressMsg.tool_name) || crypto.randomUUID()
+          const progressMsg = sdkMessage as SDKToolProgressMessage
+          const callId = progressMsg.tool_use_id
           toolUseIdByName.set(progressMsg.tool_name, callId)
           this.publishToolUpdate(eventBus, taskId, contextId, {
             request: { callId, name: progressMsg.tool_name },
@@ -234,7 +254,15 @@ class ClaudeCodeExecutor implements AgentExecutor {
       contextId: contextId ?? crypto.randomUUID(),
       parts: [{ kind: 'text', text: 'Task canceled.' }],
     }
-    this.publishStatus(eventBus, taskId, message.contextId!, 'canceled', true, message, 'state-change')
+    this.publishStatus(
+      eventBus,
+      taskId,
+      message.contextId!,
+      'canceled',
+      true,
+      message,
+      'state-change'
+    )
     eventBus.finished()
   }
 

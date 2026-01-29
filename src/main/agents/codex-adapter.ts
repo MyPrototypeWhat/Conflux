@@ -77,13 +77,14 @@ class CodexExecutor implements AgentExecutor {
     const { events } = await thread.runStreamed(text)
     const sentTextLengths = new Map<string, number>()
     const sentItemStates = new Map<string, string>()
+    // TODO: Emit tool-call-confirmation + input-required when Codex exposes approval-required tools.
 
     for await (const event of events) {
       if (this.canceledTasks.has(taskId)) {
         this.publishCanceled(eventBus, taskId, contextId)
         return
       }
-
+      console.log('[Codex A2A] event', event)
       if (event.type === 'item.updated' || event.type === 'item.completed') {
         const item = event.item
         const isCompleted = event.type === 'item.completed'
@@ -181,10 +182,20 @@ class CodexExecutor implements AgentExecutor {
                   error: item.error,
                 })
               } else if (item.result) {
+                this.publishToolOutput(
+                  eventBus,
+                  taskId,
+                  contextId,
+                  item.id,
+                  this.stringifyToolOutput(item.result),
+                  false,
+                  true
+                )
                 this.publishToolUpdate(eventBus, taskId, contextId, {
                   request: { callId: item.id, name: 'mcp_tool_call' },
                   status: 'completed',
                   result: item.result,
+                  output: item.result,
                 })
               }
             }
@@ -334,6 +345,16 @@ class CodexExecutor implements AgentExecutor {
       append,
       lastChunk,
     })
+  }
+
+  private stringifyToolOutput(value: unknown): string {
+    if (value === null || value === undefined) return ''
+    if (typeof value === 'string') return value
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch {
+      return String(value)
+    }
   }
 
   private publishFailure(

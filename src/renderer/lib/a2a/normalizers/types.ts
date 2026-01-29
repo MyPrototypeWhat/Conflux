@@ -1,4 +1,4 @@
-import type { Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, Part } from '@a2a-js/sdk'
+import type { Message, Part, TaskArtifactUpdateEvent, TaskStatusUpdateEvent } from '@a2a-js/sdk'
 import type { MessageBlockType } from '@/lib/a2a/blocks'
 
 export type NormalizedBlock =

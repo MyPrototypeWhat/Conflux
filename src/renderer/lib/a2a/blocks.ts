@@ -17,6 +17,15 @@ export interface MessageBlock {
   content: string
   isStreaming?: boolean
   metadata?: {
+    callId?: string
+    toolName?: string
+    input?: unknown
+    output?: unknown
+    error?: unknown
+    server?: string
+    tool?: string
+    arguments?: unknown
+    result?: unknown
     command?: string
     exitCode?: number
     status?: string

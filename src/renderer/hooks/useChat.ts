@@ -14,6 +14,21 @@ interface UseChatOptions {
 
 const clientFactory = new ClientFactory()
 
+const mergeDefined = (target: Record<string, unknown>, source: Record<string, unknown>) => {
+  Object.entries(source).forEach(([key, value]) => {
+    if (value !== undefined) {
+      target[key] = value
+    }
+  })
+}
+
+const adapterFromAgentId = (agentId: string): A2AAdapterKind => {
+  if (agentId === 'gemini-cli') return 'gemini-cli'
+  if (agentId === 'codex') return 'codex'
+  if (agentId === 'claude-code') return 'claude-code'
+  return 'unknown'
+}
+
 export function useChat(agentId: string, options: UseChatOptions = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -54,7 +69,13 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
       console.log('[useChat] Connected to server:', url)
 
       const resolved = await resolveAdapterForUrl(url)
-      adapterRef.current = resolved.adapter
+      adapterRef.current = resolved.adapter === 'unknown' ? adapterFromAgentId(agentId) : resolved.adapter
+      console.log('[useChat] Adapter resolved:', {
+        agentId,
+        adapter: adapterRef.current,
+        cardUrl: resolved.cardUrl,
+        fingerprint: resolved.fingerprint,
+      })
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Connection failed'
       setConnectionError(error)
@@ -180,6 +201,7 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
               const blockType = normalized.blockType
               const metadata = normalized.metadata
               const appendToCommand = normalized.appendToCommand
+              const callId = typeof metadata?.callId === 'string' ? metadata.callId : undefined
 
               if (appendToCommand && lastBlock?.type === 'command_execution') {
                 const updatedMetadata = { ...lastBlock.metadata }
@@ -196,11 +218,46 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
                 return { ...msg, blocks }
               }
 
+              if (blockType === 'tool_call' && callId) {
+                const existingIndex = blocks.findIndex(
+                  (block) => block.type === 'tool_call' && block.metadata?.callId === callId
+                )
+
+                if (existingIndex >= 0) {
+                  const existingBlock = blocks[existingIndex]
+                  const updatedMetadata = { ...existingBlock.metadata }
+                  mergeDefined(updatedMetadata, {
+                    callId,
+                    toolName: metadata?.toolName,
+                    server: metadata?.server,
+                    tool: metadata?.tool,
+                    arguments: metadata?.arguments,
+                    result: metadata?.result,
+                    input: metadata?.input,
+                    output: metadata?.output,
+                    error: metadata?.error,
+                    status: metadata?.status,
+                  })
+
+                  blocks[existingIndex] = {
+                    ...existingBlock,
+                    content: deltaText.length > 0 ? deltaText : existingBlock.content,
+                    metadata: updatedMetadata,
+                    isStreaming:
+                      metadata?.status === 'completed' || metadata?.status === 'failed'
+                        ? false
+                        : existingBlock.isStreaming,
+                  }
+                  return { ...msg, blocks }
+                }
+              }
+
               const shouldCreateBlock =
                 deltaText.length > 0 ||
                 blockType === 'command_execution' ||
                 blockType === 'file_change' ||
                 blockType === 'todo_list' ||
+                blockType === 'web_search' ||
                 blockType === 'tool_call' ||
                 blockType === 'error'
 
@@ -219,29 +276,63 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
                   const command =
                     (metadata?.command as string | undefined) ||
                     (metadata?.toolName as string | undefined)
-                  if (command) blockMetadata.command = command
-                  if (metadata?.status) blockMetadata.status = metadata.status as string
-                  if (metadata?.exitCode !== undefined)
-                    blockMetadata.exitCode = metadata.exitCode as number
+                  mergeDefined(blockMetadata, {
+                    command,
+                    status:
+                      typeof metadata?.status === 'string' ? (metadata.status as string) : undefined,
+                    exitCode:
+                      typeof metadata?.exitCode === 'number' ? (metadata.exitCode as number) : undefined,
+                  })
                 }
-                if (blockType === 'web_search' && metadata?.query) {
-                  blockMetadata.query = metadata.query as string
+                if (blockType === 'tool_call') {
+                  mergeDefined(blockMetadata, {
+                    callId,
+                    toolName:
+                      typeof metadata?.toolName === 'string' ? (metadata.toolName as string) : undefined,
+                    status:
+                      typeof metadata?.status === 'string' ? (metadata.status as string) : undefined,
+                    server: typeof metadata?.server === 'string' ? (metadata.server as string) : undefined,
+                    tool: typeof metadata?.tool === 'string' ? (metadata.tool as string) : undefined,
+                    arguments: metadata?.arguments as unknown,
+                    result: metadata?.result as unknown,
+                    input: metadata?.input as unknown,
+                    output: metadata?.output as unknown,
+                    error: metadata?.error as unknown,
+                  })
                 }
-                if (blockType === 'todo_list' && metadata?.items) {
-                  blockMetadata.items = metadata.items as Array<{
-                    text: string
-                    completed: boolean
-                  }>
+                if (blockType === 'web_search') {
+                  mergeDefined(blockMetadata, {
+                    query:
+                      typeof metadata?.query === 'string' ? (metadata.query as string) : undefined,
+                  })
                 }
-                if (blockType === 'file_change' && metadata?.changes) {
-                  blockMetadata.changes = metadata.changes as Array<{ path: string; kind: string }>
+                if (blockType === 'todo_list') {
+                  mergeDefined(blockMetadata, {
+                    items: metadata?.items as Array<{ text: string; completed: boolean }> | undefined,
+                  })
                 }
+                if (blockType === 'file_change') {
+                  mergeDefined(blockMetadata, {
+                    changes: metadata?.changes as Array<{ path: string; kind: string }> | undefined,
+                  })
+                }
+
+                const isTerminalStatus =
+                  typeof metadata?.status === 'string' &&
+                  ['completed', 'failed', 'succeeded', 'error'].includes(
+                    metadata.status.toLowerCase()
+                  )
+                const isToolBlock =
+                  blockType === 'tool_call' ||
+                  blockType === 'web_search' ||
+                  blockType === 'file_change' ||
+                  blockType === 'todo_list'
 
                 blocks.push({
                   id: crypto.randomUUID(),
                   type: blockType,
                   content: deltaText,
-                  isStreaming: true,
+                  isStreaming: isToolBlock ? !isTerminalStatus : true,
                   metadata: Object.keys(blockMetadata).length > 0 ? blockMetadata : undefined,
                 })
               }
@@ -255,12 +346,15 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
           if (!event) continue
 
           if (event.kind === 'status-update') {
+            console.log('[useChat] status-update', event)
             const blocks = normalizer.handleStatusUpdate(event as TaskStatusUpdateEvent)
             blocks.forEach(applyNormalizedBlock)
           } else if (event.kind === 'artifact-update') {
+            console.log('[useChat] artifact-update', event)
             const blocks = normalizer.handleArtifactUpdate(event as TaskArtifactUpdateEvent)
             blocks.forEach(applyNormalizedBlock)
           } else if (event.kind === 'message') {
+            console.log('[useChat] message', event)
             const blocks = normalizer.handleMessage(event as Message)
             blocks.forEach(applyNormalizedBlock)
           }

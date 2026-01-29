@@ -1,6 +1,6 @@
 import type { Message, Part, TaskArtifactUpdateEvent, TaskStatusUpdateEvent } from '@a2a-js/sdk'
-import type { NormalizedBlock } from '@/lib/a2a/normalizers/types'
 import { createCommonNormalizer, normalizePart } from '@/lib/a2a/normalizers/common'
+import type { NormalizedBlock } from '@/lib/a2a/normalizers/types'
 
 type CodexToolData = {
   request?: { name?: string; callId?: string }
@@ -105,10 +105,13 @@ const normalizeToolCallData = (
     metadata: {
       status: data.status,
       callId,
+      toolName: data.server && data.tool ? `${data.server}/${data.tool}` : toolName,
       server: data.server,
       tool: data.tool,
       arguments: data.arguments,
       result: data.result,
+      input: data.arguments,
+      output: data.result,
       error: data.error,
     },
   }

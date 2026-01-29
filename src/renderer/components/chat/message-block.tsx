@@ -19,6 +19,16 @@ function blockToToolPart(block: MessageBlock): ToolPart | null {
     return 'output-available'
   }
 
+  const mapStatusState = (status?: string): ToolPart['state'] => {
+    if (!status) return block.isStreaming ? 'input-streaming' : 'input-available'
+    const normalized = status.toLowerCase()
+    if (['requested', 'in_progress', 'running', 'started'].includes(normalized))
+      return 'input-streaming'
+    if (['completed', 'succeeded', 'success'].includes(normalized)) return 'output-available'
+    if (['failed', 'error', 'cancelled', 'canceled'].includes(normalized)) return 'output-error'
+    return 'input-available'
+  }
+
   switch (block.type) {
     case 'command_execution':
       return {
@@ -48,8 +58,30 @@ function blockToToolPart(block: MessageBlock): ToolPart | null {
         type: 'WebSearch',
         state: getState(),
         input: block.metadata?.query ? { query: block.metadata.query } : undefined,
-        output: block.content ? { results: block.content } : undefined,
       }
+    case 'tool_call': {
+      const input =
+        block.metadata?.input ??
+        (block.metadata?.arguments !== undefined ? block.metadata.arguments : undefined)
+      const output =
+        block.metadata?.output ??
+        (block.metadata?.result !== undefined ? block.metadata.result : undefined)
+
+      const errorText = block.metadata?.error
+        ? typeof block.metadata.error === 'string'
+          ? block.metadata.error
+          : JSON.stringify(block.metadata.error)
+        : undefined
+
+      return {
+        type: block.metadata?.toolName || block.metadata?.tool || 'Tool',
+        state: mapStatusState(block.metadata?.status),
+        input: input !== undefined ? { input } : undefined,
+        output: output !== undefined ? { output } : undefined,
+        toolCallId: block.metadata?.callId,
+        errorText,
+      }
+    }
     default:
       return null
   }
@@ -73,7 +105,7 @@ function MessageBlockView({ block }: MessageBlockViewProps) {
       return (
         <Reasoning isStreaming={block.isStreaming}>
           <ReasoningTrigger className="text-sm">Reasoning</ReasoningTrigger>
-          <ReasoningContent markdown={!block.isStreaming}>{block.content}</ReasoningContent>
+          <ReasoningContent markdown>{block.content}</ReasoningContent>
         </Reasoning>
       )
     }

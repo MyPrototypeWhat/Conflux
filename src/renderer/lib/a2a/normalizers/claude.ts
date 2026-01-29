@@ -6,6 +6,8 @@ type ClaudeToolData = {
   request?: { name?: string; callId?: string }
   status?: string
   input?: unknown
+  output?: unknown
+  error?: unknown
   elapsedSeconds?: number
   text?: string
   description?: string
@@ -36,6 +38,8 @@ const normalizeToolCallData = (data: ClaudeToolData): NormalizedBlock | null => 
     status: data.status,
     callId: data.request?.callId,
     input: data.input,
+    output: data.output,
+    error: data.error,
     elapsedSeconds: data.elapsedSeconds,
   }
 
