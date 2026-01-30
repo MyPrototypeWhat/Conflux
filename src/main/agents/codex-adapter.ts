@@ -18,16 +18,32 @@ import {
 import type { Codex, Thread } from '@openai/codex-sdk'
 import express from 'express'
 import type { A2AMessage, AgentAdapter, AgentCapabilities, AgentEvent } from '../../types/a2a'
+import type { CodexConfig } from '../../types/config'
+import { getAgentManager } from '../agent-manager'
+import { getConfigRepository } from '../storage'
 
 const DEFAULT_PORT = 50002
 
 class CodexExecutor implements AgentExecutor {
   private threads: Map<string, Thread>
+  private threadWorkingDirs: Map<string, string>
   private canceledTasks = new Set<string>()
   private taskContexts = new Map<string, string>()
+  private configRepo = getConfigRepository()
+  private codex: Codex
 
-  constructor(private codex: Codex) {
+  constructor(codex: Codex) {
+    this.codex = codex
     this.threads = new Map()
+    this.threadWorkingDirs = new Map()
+  }
+
+  private getConfig(projectPath?: string): CodexConfig {
+    return this.configRepo.getCodexConfig(projectPath)
+  }
+
+  private getProjectPathForContext(contextId: string): string | undefined {
+    return getAgentManager().getContextProjectPath(contextId)
   }
 
   async execute(requestContext: RequestContext, eventBus: ExecutionEventBus): Promise<void> {
@@ -64,14 +80,42 @@ class CodexExecutor implements AgentExecutor {
     }
 
     let thread = this.threads.get(contextId)
+
+    // Get projectPath from context (set by IPC handler from Tab metadata)
+    const projectPath = this.getProjectPathForContext(contextId)
+    const config = this.getConfig(projectPath)
+
+    // Check if working directory changed - if so, create new thread
+    const currentWorkingDir = config.workingDirectory || projectPath || process.cwd()
+    const existingThreadKey = `${contextId}:${currentWorkingDir}`
+    const cachedThreadKey = this.threadWorkingDirs.get(contextId)
+
+    if (thread && cachedThreadKey !== existingThreadKey) {
+      // Working directory changed, need new thread
+      this.threads.delete(contextId)
+      thread = undefined
+    }
+
     if (!thread) {
+      const workingDir = config.workingDirectory || projectPath || undefined
       thread = this.codex.startThread({
         skipGitRepoCheck: true,
-        webSearchEnabled: true,
-        networkAccessEnabled: true,
+        webSearchEnabled: config.webSearchEnabled,
+        networkAccessEnabled: config.networkAccess,
         webSearchMode: 'live',
+        workingDirectory: workingDir,
+        sandboxMode: config.sandboxMode,
+        approvalPolicy: config.approvalPolicy === 'never' ? 'never' : config.approvalPolicy,
       })
       this.threads.set(contextId, thread)
+      this.threadWorkingDirs.set(contextId, existingThreadKey)
+      console.log('[Codex A2A] Thread started with config:', {
+        projectPath,
+        workingDirectory: workingDir || process.cwd(),
+        webSearchEnabled: config.webSearchEnabled,
+        networkAccess: config.networkAccess,
+        sandboxMode: config.sandboxMode,
+      })
     }
 
     const { events } = await thread.runStreamed(text)
@@ -85,7 +129,11 @@ class CodexExecutor implements AgentExecutor {
         return
       }
       console.log('[Codex A2A] event', event)
-      if (event.type === 'item.updated' || event.type === 'item.completed') {
+      if (
+        event.type === 'item.started' ||
+        event.type === 'item.updated' ||
+        event.type === 'item.completed'
+      ) {
         const item = event.item
         const isCompleted = event.type === 'item.completed'
 
@@ -384,7 +432,15 @@ class CodexExecutor implements AgentExecutor {
       contextId: contextId ?? crypto.randomUUID(),
       parts: [{ kind: 'text', text: 'Task canceled.' }],
     }
-    this.publishStatus(eventBus, taskId, message.contextId!, 'canceled', true, message, 'state-change')
+    this.publishStatus(
+      eventBus,
+      taskId,
+      message.contextId!,
+      'canceled',
+      true,
+      message,
+      'state-change'
+    )
     this.canceledTasks.delete(taskId)
     this.taskContexts.delete(taskId)
   }
@@ -515,7 +571,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
             name: 'File Operations',
             description: 'Create or modify files based on instructions',
             tags: ['files', 'edit', 'patch'],
-            examples: ['Update the API client to add retries', 'Create a new config file for the service'],
+            examples: [
+              'Update the API client to add retries',
+              'Create a new config file for the service',
+            ],
             inputModes: ['text/plain'],
             outputModes: ['text/plain'],
           },
@@ -542,7 +601,10 @@ export class CodexAdapter extends EventEmitter implements AgentAdapter {
             name: 'MCP Tool Calls',
             description: 'Invoke MCP tools for specialized tasks',
             tags: ['mcp', 'tools', 'integration'],
-            examples: ['Use an MCP tool to query internal data', 'Call a custom tool to format code'],
+            examples: [
+              'Use an MCP tool to query internal data',
+              'Call a custom tool to format code',
+            ],
             inputModes: ['text/plain'],
             outputModes: ['text/plain'],
           },

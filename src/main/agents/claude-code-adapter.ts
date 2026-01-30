@@ -17,13 +17,13 @@ import {
 } from '@a2a-js/sdk/server/express'
 import {
   type Query,
+  query,
   type SDKAssistantMessage,
   type SDKAuthStatusMessage,
   type SDKMessage,
   type SDKPartialAssistantMessage,
   type SDKResultMessage,
   type SDKToolProgressMessage,
-  query,
 } from '@anthropic-ai/claude-agent-sdk'
 import express from 'express'
 import type { A2AMessage, AgentAdapter, AgentCapabilities, AgentEvent } from '../../types/a2a'

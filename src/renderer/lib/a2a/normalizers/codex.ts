@@ -1,6 +1,6 @@
 import type { Message, Part, TaskArtifactUpdateEvent, TaskStatusUpdateEvent } from '@a2a-js/sdk'
-import { createCommonNormalizer, normalizePart } from '@/lib/a2a/normalizers/common'
-import type { NormalizedBlock } from '@/lib/a2a/normalizers/types'
+import { createCommonNormalizer, normalizePart } from '@/renderer/lib/a2a/normalizers/common'
+import type { NormalizedBlock } from '@/renderer/lib/a2a/normalizers/types'
 
 type CodexToolData = {
   request?: { name?: string; callId?: string }

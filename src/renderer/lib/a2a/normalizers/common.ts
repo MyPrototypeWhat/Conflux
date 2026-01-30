@@ -1,5 +1,5 @@
 import type { Message, Part, TaskArtifactUpdateEvent, TaskStatusUpdateEvent } from '@a2a-js/sdk'
-import type { A2AEventNormalizer, NormalizedBlock } from '@/lib/a2a/normalizers/types'
+import type { A2AEventNormalizer, NormalizedBlock } from '@/renderer/lib/a2a/normalizers/types'
 
 const mapItemTypeToBlock = (itemType?: string) => {
   switch (itemType) {
@@ -40,7 +40,8 @@ const normalizeDataPayload = (data: Record<string, unknown>) => {
 
 export const normalizePart = (part: Part): NormalizedBlock | null => {
   if (part.kind === 'text') {
-    const itemType = typeof part.metadata?.itemType === 'string' ? part.metadata.itemType : undefined
+    const itemType =
+      typeof part.metadata?.itemType === 'string' ? part.metadata.itemType : undefined
     const mapped = mapItemTypeToBlock(itemType)
     return {
       blockType: mapped.blockType,

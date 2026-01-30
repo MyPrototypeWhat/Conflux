@@ -1,6 +1,6 @@
-import type { Part, TaskStatusUpdateEvent, Message } from '@a2a-js/sdk'
-import type { NormalizedBlock } from '@/lib/a2a/normalizers/types'
-import { createCommonNormalizer, normalizePart } from '@/lib/a2a/normalizers/common'
+import type { Message, Part, TaskStatusUpdateEvent } from '@a2a-js/sdk'
+import { createCommonNormalizer, normalizePart } from '@/renderer/lib/a2a/normalizers/common'
+import type { NormalizedBlock } from '@/renderer/lib/a2a/normalizers/types'
 
 type ClaudeToolData = {
   request?: { name?: string; callId?: string }

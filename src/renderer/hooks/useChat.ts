@@ -1,12 +1,12 @@
 import type { Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent } from '@a2a-js/sdk'
 import { ClientFactory } from '@a2a-js/sdk/client'
 import { useCallback, useRef, useState } from 'react'
-import { resolveAdapterForUrl, type A2AAdapterKind } from '@/lib/a2a-adapter'
-import type { ChatMessage, MessageBlock } from '@/lib/a2a/blocks'
-import { createA2AEventNormalizer } from '@/lib/a2a/normalizers'
-import type { NormalizedBlock } from '@/lib/a2a/normalizers/types'
+import type { ChatMessage, MessageBlock } from '@/renderer/lib/a2a/blocks'
+import { createA2AEventNormalizer } from '@/renderer/lib/a2a/normalizers'
+import type { NormalizedBlock } from '@/renderer/lib/a2a/normalizers/types'
+import { type A2AAdapterKind, resolveAdapterForUrl } from '@/renderer/lib/a2a-adapter'
 
-export type { ChatMessage, MessageBlock, MessageBlockType } from '@/lib/a2a/blocks'
+export type { ChatMessage, MessageBlock, MessageBlockType } from '@/renderer/lib/a2a/blocks'
 
 interface UseChatOptions {
   onError?: (error: string) => void
@@ -69,7 +69,8 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
       console.log('[useChat] Connected to server:', url)
 
       const resolved = await resolveAdapterForUrl(url)
-      adapterRef.current = resolved.adapter === 'unknown' ? adapterFromAgentId(agentId) : resolved.adapter
+      adapterRef.current =
+        resolved.adapter === 'unknown' ? adapterFromAgentId(agentId) : resolved.adapter
       console.log('[useChat] Adapter resolved:', {
         agentId,
         adapter: adapterRef.current,
@@ -218,6 +219,64 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
                 return { ...msg, blocks }
               }
 
+              // Handle command_execution updates by callId
+              if (blockType === 'command_execution' && callId) {
+                const existingIndex = blocks.findIndex(
+                  (block) => block.type === 'command_execution' && block.metadata?.callId === callId
+                )
+
+                if (existingIndex >= 0) {
+                  const existingBlock = blocks[existingIndex]
+                  const updatedMetadata = { ...existingBlock.metadata }
+                  if (metadata?.status) updatedMetadata.status = metadata.status as string
+                  if (metadata?.exitCode !== undefined)
+                    updatedMetadata.exitCode = metadata.exitCode as number
+                  if (metadata?.command) updatedMetadata.command = metadata.command as string
+
+                  blocks[existingIndex] = {
+                    ...existingBlock,
+                    content:
+                      deltaText.length > 0
+                        ? existingBlock.content + deltaText
+                        : existingBlock.content,
+                    metadata: updatedMetadata,
+                    isStreaming:
+                      metadata?.status === 'completed' || metadata?.status === 'failed'
+                        ? false
+                        : existingBlock.isStreaming,
+                  }
+                  return { ...msg, blocks }
+                }
+              }
+
+              // Handle file_change updates by callId
+              if (blockType === 'file_change' && callId) {
+                const existingIndex = blocks.findIndex(
+                  (block) => block.type === 'file_change' && block.metadata?.callId === callId
+                )
+
+                if (existingIndex >= 0) {
+                  const existingBlock = blocks[existingIndex]
+                  const updatedMetadata = { ...existingBlock.metadata }
+                  if (metadata?.status) updatedMetadata.status = metadata.status as string
+                  if (metadata?.changes)
+                    updatedMetadata.changes = metadata.changes as Array<{
+                      path: string
+                      kind: string
+                    }>
+
+                  blocks[existingIndex] = {
+                    ...existingBlock,
+                    metadata: updatedMetadata,
+                    isStreaming:
+                      metadata?.status === 'completed' || metadata?.status === 'failed'
+                        ? false
+                        : existingBlock.isStreaming,
+                  }
+                  return { ...msg, blocks }
+                }
+              }
+
               if (blockType === 'tool_call' && callId) {
                 const existingIndex = blocks.findIndex(
                   (block) => block.type === 'tool_call' && block.metadata?.callId === callId
@@ -277,22 +336,35 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
                     (metadata?.command as string | undefined) ||
                     (metadata?.toolName as string | undefined)
                   mergeDefined(blockMetadata, {
+                    callId,
                     command,
                     status:
-                      typeof metadata?.status === 'string' ? (metadata.status as string) : undefined,
+                      typeof metadata?.status === 'string'
+                        ? (metadata.status as string)
+                        : undefined,
                     exitCode:
-                      typeof metadata?.exitCode === 'number' ? (metadata.exitCode as number) : undefined,
+                      typeof metadata?.exitCode === 'number'
+                        ? (metadata.exitCode as number)
+                        : undefined,
                   })
                 }
                 if (blockType === 'tool_call') {
                   mergeDefined(blockMetadata, {
                     callId,
                     toolName:
-                      typeof metadata?.toolName === 'string' ? (metadata.toolName as string) : undefined,
+                      typeof metadata?.toolName === 'string'
+                        ? (metadata.toolName as string)
+                        : undefined,
                     status:
-                      typeof metadata?.status === 'string' ? (metadata.status as string) : undefined,
-                    server: typeof metadata?.server === 'string' ? (metadata.server as string) : undefined,
-                    tool: typeof metadata?.tool === 'string' ? (metadata.tool as string) : undefined,
+                      typeof metadata?.status === 'string'
+                        ? (metadata.status as string)
+                        : undefined,
+                    server:
+                      typeof metadata?.server === 'string'
+                        ? (metadata.server as string)
+                        : undefined,
+                    tool:
+                      typeof metadata?.tool === 'string' ? (metadata.tool as string) : undefined,
                     arguments: metadata?.arguments as unknown,
                     result: metadata?.result as unknown,
                     input: metadata?.input as unknown,
@@ -302,18 +374,26 @@ export function useChat(agentId: string, options: UseChatOptions = {}) {
                 }
                 if (blockType === 'web_search') {
                   mergeDefined(blockMetadata, {
+                    callId,
                     query:
                       typeof metadata?.query === 'string' ? (metadata.query as string) : undefined,
+                    status: metadata?.status as string | undefined,
                   })
                 }
                 if (blockType === 'todo_list') {
                   mergeDefined(blockMetadata, {
-                    items: metadata?.items as Array<{ text: string; completed: boolean }> | undefined,
+                    callId,
+                    items: metadata?.items as
+                      | Array<{ text: string; completed: boolean }>
+                      | undefined,
+                    status: metadata?.status as string | undefined,
                   })
                 }
                 if (blockType === 'file_change') {
                   mergeDefined(blockMetadata, {
+                    callId,
                     changes: metadata?.changes as Array<{ path: string; kind: string }> | undefined,
+                    status: metadata?.status as string | undefined,
                   })
                 }
 

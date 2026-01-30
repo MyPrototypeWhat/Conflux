@@ -1,8 +1,8 @@
-import { Attachment } from '@/components/ui/attachment'
-import { MessageContent } from '@/components/ui/message'
-import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/components/ui/reasoning'
-import { Tool, type ToolPart } from '@/components/ui/tool'
-import type { MessageBlock } from '@/hooks/useChat'
+import { Attachment } from '@/renderer/components/ui/attachment'
+import { MessageContent } from '@/renderer/components/ui/message'
+import { Reasoning, ReasoningContent, ReasoningTrigger } from '@/renderer/components/ui/reasoning'
+import { Tool, type ToolPart } from '@/renderer/components/ui/tool'
+import type { MessageBlock } from '@/renderer/hooks/useChat'
 
 export type MessageBlockViewProps = {
   block: MessageBlock

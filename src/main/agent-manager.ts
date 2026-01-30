@@ -18,6 +18,7 @@ function hasServerUrl(adapter: AgentAdapter): adapter is ServerUrlAdapter {
 export class AgentManager extends EventEmitter {
   private adapters: Map<string, AgentAdapter> = new Map()
   private activeContexts: Map<string, string> = new Map() // tabId -> contextId
+  private contextProjectPaths: Map<string, string> = new Map() // contextId -> projectPath
 
   constructor() {
     super()
@@ -100,6 +101,20 @@ export class AgentManager extends EventEmitter {
     return contextId
   }
 
+  /**
+   * Set project path for a context
+   */
+  setContextProjectPath(contextId: string, projectPath: string): void {
+    this.contextProjectPaths.set(contextId, projectPath)
+  }
+
+  /**
+   * Get project path for a context
+   */
+  getContextProjectPath(contextId: string): string | undefined {
+    return this.contextProjectPaths.get(contextId)
+  }
+
   // Legacy method - message sending now happens in renderer
   async *sendMessage(
     agentId: string,
@@ -151,6 +166,10 @@ export class AgentManager extends EventEmitter {
   }
 
   clearContext(tabId: string): void {
+    const contextId = this.activeContexts.get(tabId)
+    if (contextId) {
+      this.contextProjectPaths.delete(contextId)
+    }
     this.activeContexts.delete(tabId)
   }
 
