@@ -63,8 +63,9 @@ export default defineConfig({
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': resolve(__dirname, './src/renderer'),
-        '@types': resolve(__dirname, './src/types'),
+        '@/renderer': resolve(__dirname, './src/renderer'),
+        '@/main': resolve(__dirname, './src/main'),
+        '@/types': resolve(__dirname, './src/types'),
       },
       dedupe: ['react', 'react-dom'],
     },

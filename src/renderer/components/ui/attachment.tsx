@@ -1,7 +1,7 @@
 import type { Part } from '@a2a-js/sdk'
 import { useEffect, useMemo } from 'react'
-import { buttonVariants } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { buttonVariants } from '@/renderer/components/ui/button'
+import { cn } from '@/renderer/lib/utils'
 
 type ArtifactData = {
   artifactId: string

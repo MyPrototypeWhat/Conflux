@@ -1,8 +1,12 @@
 import { CheckCircle, ChevronDown, Loader2, Settings, XCircle } from 'lucide-react'
 import { useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { cn } from '@/lib/utils'
+import { Button } from '@/renderer/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/renderer/components/ui/collapsible'
+import { cn } from '@/renderer/lib/utils'
 
 export type ToolPart = {
   type: string

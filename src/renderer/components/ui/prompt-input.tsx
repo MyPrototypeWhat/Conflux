@@ -1,9 +1,14 @@
 'use client'
 
 import React, { createContext, useContext, useLayoutEffect, useRef, useState } from 'react'
-import { Textarea } from '@/components/ui/textarea'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
+import { Textarea } from '@/renderer/components/ui/textarea'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/renderer/components/ui/tooltip'
+import { cn } from '@/renderer/lib/utils'
 
 type PromptInputContextType = {
   isLoading: boolean

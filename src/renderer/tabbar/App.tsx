@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getAgentIcon } from '@/components/icons'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
-import type { Tab } from '../../types/tab'
+import { getAgentIcon } from '@/renderer/components/icons'
+import { Button } from '@/renderer/components/ui/button'
+import { cn } from '@/renderer/lib/utils'
+import type { Tab } from '@/types/tab'
 
 interface TabsState {
   tabs: Tab[]
