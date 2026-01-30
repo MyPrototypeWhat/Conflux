@@ -1,5 +1,7 @@
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
 import { is } from '@electron-toolkit/utils'
-import { app, BaseWindow, globalShortcut, session } from 'electron'
+import { app, BaseWindow, globalShortcut, protocol, session } from 'electron'
 import { setupIPCHandlers } from './ipc-handlers'
 import { closeDatabase, initializeDatabase } from './storage'
 import { TabManager } from './tab-manager'
@@ -9,6 +11,35 @@ let tabManager: TabManager | null = null
 export function getTabManager(): TabManager {
   if (!tabManager) throw new Error('TabManager not initialized')
   return tabManager
+}
+
+function setupLocalFileProtocol() {
+  // Register custom protocol to serve local files in iframe
+  protocol.handle('local-file', async (request) => {
+    const filePath = decodeURIComponent(request.url.replace('local-file://', ''))
+    try {
+      const content = await readFile(filePath)
+      const ext = path.extname(filePath).toLowerCase()
+      const mimeTypes: Record<string, string> = {
+        '.html': 'text/html',
+        '.htm': 'text/html',
+        '.css': 'text/css',
+        '.js': 'text/javascript',
+        '.json': 'application/json',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.ico': 'image/x-icon',
+      }
+      return new Response(content, {
+        headers: { 'Content-Type': mimeTypes[ext] || 'text/plain' },
+      })
+    } catch {
+      return new Response('File not found', { status: 404 })
+    }
+  })
 }
 
 function setupCORS() {
@@ -67,6 +98,7 @@ app.whenReady().then(() => {
   // Initialize database
   initializeDatabase()
 
+  setupLocalFileProtocol()
   setupCORS()
   createWindow()
 

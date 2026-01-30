@@ -68,6 +68,7 @@ export class TabManager {
       agentId: options.agentId!,
       title,
       isActive: false,
+      metadata: options.metadata,
     }
 
     const view = new WebContentsView({
@@ -202,7 +203,7 @@ export class TabManager {
     this.notifyTabbarUpdate()
   }
 
-  replaceTabAgent(tabId: string, newAgentId: string): boolean {
+  replaceTabAgent(tabId: string, newAgentId: string, metadata?: Tab['metadata']): boolean {
     const oldView = this.contentViews.get(tabId)
     if (!oldView) return false
 
@@ -248,7 +249,13 @@ export class TabManager {
       ...this.tabs[tabIndex],
       agentId: newAgentId,
       title: newTitle,
+      metadata: metadata ?? this.tabs[tabIndex].metadata,
     }
+    console.log('[TabManager] replaceTabAgent - updated tab:', {
+      tabId,
+      newAgentId,
+      metadata: this.tabs[tabIndex].metadata,
+    })
 
     // Refresh layout and visibility
     this.updateLayout()

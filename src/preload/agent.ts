@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AgentEvent, AgentStatusUpdate } from '../types/a2a'
 import type { AgentConfig } from '../types/agent'
-import type { Tab } from '../types/tab'
+import type { Tab, TabMetadata } from '../types/tab'
 
 // Import config preload to expose configAPI
 import './config'
@@ -10,7 +10,41 @@ export interface AgentAPI {
   ping: () => Promise<string>
   getAgentInfo: (agentId: string) => Promise<AgentConfig | null>
   getAllAgents: () => Promise<AgentConfig[]>
-  replaceCurrentTab: (agentId: string) => Promise<boolean>
+  replaceCurrentTab: (agentId: string, metadata?: TabMetadata) => Promise<boolean>
+  getActiveTab: () => Promise<Tab | null>
+
+  dialog: {
+    selectFolder: () => Promise<string | null>
+  }
+
+  fs: {
+    getRoot: () => Promise<string>
+    listDir: (options?: {
+      path?: string
+      depth?: number
+      maxEntries?: number
+      rootPath?: string
+    }) => Promise<{
+      name: string
+      path: string
+      kind: 'dir'
+      children: Array<{
+        name: string
+        path: string
+        kind: 'file' | 'dir'
+        children?: unknown
+      }>
+    }>
+    readFile: (path: string, rootPath?: string) => Promise<string>
+    writeFile: (path: string, content: string, rootPath?: string) => Promise<{ success: boolean }>
+    listChildren: (
+      dirPath: string,
+      rootPath?: string
+    ) => Promise<Array<{ name: string; path: string; kind: 'file' | 'dir' }>>
+    watch: (dirPath: string) => Promise<{ success: boolean }>
+    unwatch: (dirPath: string) => Promise<{ success: boolean }>
+    onFilesChanged: (callback: (dirPath: string) => void) => () => void
+  }
 
   // A2A API
   a2a: {
@@ -48,10 +82,31 @@ const agentAPI: AgentAPI = {
   ping: () => ipcRenderer.invoke('ping'),
   getAgentInfo: (agentId) => ipcRenderer.invoke('agent:getById', agentId),
   getAllAgents: () => ipcRenderer.invoke('agent:getAll'),
-  replaceCurrentTab: async (agentId) => {
+  replaceCurrentTab: async (agentId, metadata) => {
     const activeTab: Tab | null = await ipcRenderer.invoke('tab:getActive')
     if (!activeTab) return false
-    return ipcRenderer.invoke('tab:replaceAgent', activeTab.id, agentId)
+    return ipcRenderer.invoke('tab:replaceAgent', activeTab.id, agentId, metadata)
+  },
+  getActiveTab: () => ipcRenderer.invoke('tab:getActive'),
+
+  dialog: {
+    selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
+  },
+
+  fs: {
+    getRoot: () => ipcRenderer.invoke('fs:getRoot'),
+    listDir: (options) => ipcRenderer.invoke('fs:listDir', options),
+    readFile: (filePath, rootPath) => ipcRenderer.invoke('fs:readFile', filePath, rootPath),
+    writeFile: (filePath, content, rootPath) =>
+      ipcRenderer.invoke('fs:writeFile', filePath, content, rootPath),
+    listChildren: (dirPath, rootPath) => ipcRenderer.invoke('fs:listChildren', dirPath, rootPath),
+    watch: (dirPath) => ipcRenderer.invoke('fs:watch', dirPath),
+    unwatch: (dirPath) => ipcRenderer.invoke('fs:unwatch', dirPath),
+    onFilesChanged: (callback) => {
+      const handler = (_event: Electron.IpcRendererEvent, dirPath: string) => callback(dirPath)
+      ipcRenderer.on('files:changed', handler)
+      return () => ipcRenderer.removeListener('files:changed', handler)
+    },
   },
 
   a2a: {
