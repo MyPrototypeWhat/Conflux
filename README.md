@@ -11,6 +11,15 @@ A unified AI Agent desktop client that brings Claude Code, Codex, Gemini CLI and
 - **Structured Tool Rendering** - Shell commands, file edits, web searches, and todo lists render as tool cards
 - **Artifact Attachments** - Streamed tool output and artifacts are shown as attachments
 - **Reasoning View** - Collapsible reasoning blocks for agent thought streams
+- **Project-Aware Codex Sessions** - Per-project settings (sandbox, network, web search, approval policy)
+- **Right-Side Workspace Panel** - File tree, previews, and settings in a resizable panel
+- **Editable File Preview** - CodeMirror editor with dirty state and save button
+- **Local HTML Preview** - Auto-open HTML files in the Browser tab via a custom protocol
+- **Live File Refresh** - File tree auto-updates using a native watcher
+
+## Screenshot
+
+![Conflux UI](public/image.png)
 
 ## Getting Started
 
@@ -53,3 +62,5 @@ pnpm build:dist
 - [x] Codex full integration
 - [x] Gemini CLI full integration
 - [ ] Custom Agent onboarding support
+
+> I only have a Codex account at the moment, so Claude Code / Gemini CLI are expected to work but not fully verified yet. Contributions and validation are welcome.
