@@ -105,7 +105,7 @@ class CodexExecutor implements AgentExecutor {
         webSearchMode: 'live',
         workingDirectory: workingDir,
         sandboxMode: config.sandboxMode,
-        approvalPolicy: config.approvalPolicy === 'never' ? 'never' : config.approvalPolicy,
+        approvalPolicy: config.approvalPolicy,
       })
       this.threads.set(contextId, thread)
       this.threadWorkingDirs.set(contextId, existingThreadKey)
