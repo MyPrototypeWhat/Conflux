@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AgentConfigs, AgentId, AppConfig, GlobalConfig } from '../types/config'
+import type { AgentConfigs, AgentId, AppConfig, CodexConfig, GlobalConfig } from '../types/config'
 
 type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P]
@@ -79,6 +79,12 @@ export interface ConfigAPI {
 
   // Theme change listener
   onThemeChanged: (callback: (theme: Theme) => void) => () => void
+
+  // Codex project-level config
+  getCodexConfig: (projectPath?: string) => Promise<CodexConfig>
+  setCodexProjectConfig: (projectPath: string, config: DeepPartial<CodexConfig>) => Promise<void>
+  deleteCodexProjectConfig: (projectPath: string) => Promise<void>
+  listCodexProjects: () => Promise<string[]>
 }
 
 const configAPI: ConfigAPI = {
@@ -110,6 +116,14 @@ const configAPI: ConfigAPI = {
     ipcRenderer.on('config:themeChanged', handler)
     return () => ipcRenderer.removeListener('config:themeChanged', handler)
   },
+
+  // Codex project-level config
+  getCodexConfig: (projectPath) => ipcRenderer.invoke('config:getCodexConfig', projectPath),
+  setCodexProjectConfig: (projectPath, config) =>
+    ipcRenderer.invoke('config:setCodexProjectConfig', projectPath, config),
+  deleteCodexProjectConfig: (projectPath) =>
+    ipcRenderer.invoke('config:deleteCodexProjectConfig', projectPath),
+  listCodexProjects: () => ipcRenderer.invoke('config:listCodexProjects'),
 }
 
 contextBridge.exposeInMainWorld('configAPI', configAPI)

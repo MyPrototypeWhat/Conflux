@@ -3,6 +3,7 @@ import {
   type AgentConfigs,
   type AgentId,
   type AppConfig,
+  type CodexConfig,
   DEFAULT_CLAUDE_CODE_CONFIG,
   DEFAULT_CODEX_CONFIG,
   DEFAULT_GEMINI_CONFIG,
@@ -194,6 +195,78 @@ export class ConfigRepository {
     this.deleteApiKey('gemini-cli')
     this.deleteApiKey('claude-code')
     this.deleteApiKey('codex')
+  }
+
+  // ============================================
+  // Codex project-level config operations
+  // ============================================
+
+  /**
+   * Get Codex config with project-level overrides
+   * @param projectPath Optional project path for project-specific config
+   * @returns Merged config (default + project overrides)
+   */
+  getCodexConfig(projectPath?: string): CodexConfig {
+    const defaultConfig = this.getAgent('codex')
+
+    if (!projectPath) {
+      return defaultConfig
+    }
+
+    const projectKey = `codex:project:${projectPath}`
+    const projectValue = this.getValue(projectKey)
+
+    if (!projectValue) {
+      return defaultConfig
+    }
+
+    try {
+      const projectConfig = JSON.parse(projectValue) as DeepPartial<CodexConfig>
+      return deepMerge(defaultConfig, projectConfig)
+    } catch {
+      return defaultConfig
+    }
+  }
+
+  /**
+   * Set Codex config for a specific project
+   * @param projectPath Project path
+   * @param config Config to save (will be merged with existing)
+   */
+  setCodexProjectConfig(projectPath: string, config: DeepPartial<CodexConfig>): void {
+    const projectKey = `codex:project:${projectPath}`
+    const existingValue = this.getValue(projectKey)
+
+    let merged: CodexConfig
+    if (existingValue) {
+      try {
+        const existing = JSON.parse(existingValue) as DeepPartial<CodexConfig>
+        merged = deepMerge(deepMerge(DEFAULT_CODEX_CONFIG, existing), config)
+      } catch {
+        merged = deepMerge(DEFAULT_CODEX_CONFIG, config)
+      }
+    } else {
+      merged = deepMerge(DEFAULT_CODEX_CONFIG, config)
+    }
+
+    this.setValue(projectKey, JSON.stringify(merged))
+  }
+
+  /**
+   * Delete project-specific Codex config
+   */
+  deleteCodexProjectConfig(projectPath: string): void {
+    this.deleteValue(`codex:project:${projectPath}`)
+  }
+
+  /**
+   * List all projects with Codex configs
+   */
+  listCodexProjects(): string[] {
+    const rows = this.db
+      .prepare("SELECT key FROM config WHERE key LIKE 'codex:project:%'")
+      .all() as { key: string }[]
+    return rows.map((row) => row.key.replace('codex:project:', ''))
   }
 }
 

@@ -1,5 +1,11 @@
 import { BrowserWindow, ipcMain } from 'electron'
-import type { AgentConfigs, AgentId, AppConfig, GlobalConfig } from '../../types/config'
+import type {
+  AgentConfigs,
+  AgentId,
+  AppConfig,
+  CodexConfig,
+  GlobalConfig,
+} from '../../types/config'
 import { getTabManager } from '../index'
 import { getConfigRepository } from '../storage'
 
@@ -101,5 +107,28 @@ export function setupConfigHandlers(): void {
 
   ipcMain.handle('config:resetAll', (): void => {
     repo.resetAll()
+  })
+
+  // ============================================
+  // Codex project-level config
+  // ============================================
+
+  ipcMain.handle('config:getCodexConfig', (_, projectPath?: string): CodexConfig => {
+    return repo.getCodexConfig(projectPath)
+  })
+
+  ipcMain.handle(
+    'config:setCodexProjectConfig',
+    (_, projectPath: string, config: DeepPartial<CodexConfig>): void => {
+      repo.setCodexProjectConfig(projectPath, config)
+    }
+  )
+
+  ipcMain.handle('config:deleteCodexProjectConfig', (_, projectPath: string): void => {
+    repo.deleteCodexProjectConfig(projectPath)
+  })
+
+  ipcMain.handle('config:listCodexProjects', (): string[] => {
+    return repo.listCodexProjects()
   })
 }

@@ -89,13 +89,29 @@ export interface ClaudeCodeConfig extends BaseAgentConfig {
 // Codex Configuration
 // ============================================
 
+export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+export type CodexApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never'
+export type CodexReasoningEffort = 'minimal' | 'low' | 'medium' | 'high'
+
 export interface CodexConfig extends BaseAgentConfig {
   /** Model to use */
   model: string
   /** Max output tokens */
   maxTokens: number
-  /** Enable auto-approve mode */
+  /** Enable auto-approve mode (legacy, use approvalPolicy instead) */
   autoApprove: boolean
+  /** Sandbox mode for filesystem access */
+  sandboxMode: CodexSandboxMode
+  /** Additional writable directories in workspace-write mode */
+  writableRoots: string[]
+  /** Allow network access */
+  networkAccess: boolean
+  /** Approval policy for command execution */
+  approvalPolicy: CodexApprovalPolicy
+  /** Enable web search */
+  webSearchEnabled: boolean
+  /** Reasoning effort level */
+  reasoningEffort: CodexReasoningEffort
 }
 
 // ============================================
@@ -166,9 +182,15 @@ export const DEFAULT_CLAUDE_CODE_CONFIG: ClaudeCodeConfig = {
 export const DEFAULT_CODEX_CONFIG: CodexConfig = {
   enabled: true,
   workingDirectory: '',
-  model: 'gpt-4o',
+  model: 'gpt-5-codex',
   maxTokens: 4096,
   autoApprove: false,
+  sandboxMode: 'workspace-write',
+  writableRoots: [],
+  networkAccess: true,
+  approvalPolicy: 'on-failure',
+  webSearchEnabled: true,
+  reasoningEffort: 'medium',
 }
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
