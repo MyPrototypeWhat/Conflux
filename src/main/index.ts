@@ -80,8 +80,8 @@ function createWindow() {
   tabManager = new TabManager(mainWindow)
   setupIPCHandlers(tabManager)
 
-  // Create a default Claude Code tab
-  tabManager.createTab({ agentId: 'claude-code' })
+  // Create a default New Tab
+  tabManager.createTab({ agentId: 'new-tab' })
 
   // Register DevTools shortcut in dev mode
   if (is.dev) {

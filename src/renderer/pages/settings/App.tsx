@@ -1,6 +1,6 @@
-import type { GlobalConfig } from '@types/config'
 import { useEffect, useState } from 'react'
-import { useTheme } from '@/hooks/useTheme'
+import { useTheme } from '@/renderer/hooks/useTheme'
+import type { GlobalConfig } from '@/types/config'
 
 export default function App() {
   const { theme, setTheme, isLoaded } = useTheme()

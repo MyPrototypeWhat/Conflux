@@ -62,6 +62,7 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
   useEffect(() => {
     if (!isResizing) return
     document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
     const handleMove = (event: MouseEvent) => {
       if (!containerRef.current) return
       const rect = containerRef.current.getBoundingClientRect()
@@ -73,6 +74,7 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
     window.addEventListener('mouseup', handleUp)
     return () => {
       document.body.style.userSelect = ''
+      document.body.style.cursor = ''
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
     }
@@ -227,14 +229,20 @@ function AgentChat({ agentId, name, icon: Icon }: AgentChatProps) {
           tabIndex={0}
           aria-valuenow={panelWidth}
           className="w-1 cursor-col-resize bg-border hover:bg-primary/50"
-          onMouseDown={() => setIsResizing(true)}
+          onMouseDown={(event) => {
+            event.preventDefault()
+            setIsResizing(true)
+          }}
         />
       )}
 
       {/* Panel */}
       {isPanelOpen && (
         <div
-          className="shrink-0 border-l border-border bg-background"
+          className={cn(
+            'shrink-0 border-l border-border bg-background',
+            isResizing && 'pointer-events-none'
+          )}
           style={{ width: `${panelWidth}px` }}
         >
           <RightPanel
